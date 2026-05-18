@@ -1,0 +1,37 @@
+Copyright (c) 2025 Rohit Khatri
+
+All Rights Reserved.
+
+This software and its source code are the exclusive property of the copyright
+holder. No part of this software, including but not limited to the source code,
+compiled binaries, assets, and documentation, may be reproduced, distributed,
+modified, sublicensed, or sold in any form without the express prior written
+permission of the copyright holder.
+
+Permitted:
+- Personal use of compiled releases downloaded from official sources
+  (Modrinth, CurseForge)
+- Including Atmos in any modpack, public or private, without requiring
+  prior permission, provided the mod is sourced from official platforms
+  (Modrinth, CurseForge) and is not modified
+- Temporary configuration adjustments or compatibility patches for use inside
+  a private or public modpack are allowed only when necessary for integration
+  with the modpack and may not be redistributed as a standalone modified version
+
+Modification Policy:
+- Modification of the source code or compiled binaries is NOT allowed without
+  explicit permission from the copyright holder
+- If you wish to create compatibility edits, forks, ports, addons, or modified
+  versions for a modpack project, you must contact the author first
+- Contact: Discord @rohitvoxel
+
+Not Permitted:
+- Redistribution of compiled jars outside of official sources
+- Public redistribution of modified jars or source code
+- Commercial use of any kind
+- Reposting or mirroring on any platform
+- Claiming the project or its assets as your own
+
+THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED. IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM,
+DAMAGES, OR OTHER LIABILITY ARISING FROM THE USE OF THIS SOFTWARE.
