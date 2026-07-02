@@ -1,19 +1,184 @@
 package net.atmos.core;
 
+import net.atmos.atmosphere.fog.FogContext;
 import net.atmos.atmosphere.fog.FogManager;
+import net.atmos.atmosphere.light.CrepuscularRayController;
+import net.atmos.atmosphere.light.CrepuscularRayRenderer;
+import net.atmos.atmosphere.sky.MoonlightController;
+import net.atmos.atmosphere.sky.SkyColorController;
+import net.atmos.atmosphere.sky.SunGlareController;
+import net.atmos.cellgrid.CellGrid;
+import net.atmos.compat.ShaderDetector;
+import net.atmos.config.AtmosConfig;
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
+import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
+import net.minecraft.client.Minecraft;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.world.level.Level;
 
 public class AtmosClient implements ClientModInitializer {
 
-	private static final FogManager FOG_MANAGER = new FogManager();
+	private static final FogManager               FOG_MANAGER           = new FogManager();
+	private static final SkyColorController        SKY_COLOR_CONTROLLER  = new SkyColorController();
+	private static final SunGlareController        SUN_GLARE_CONTROLLER  = new SunGlareController();
+	private static final MoonlightController       MOONLIGHT_CONTROLLER  = new MoonlightController();
 
-	public static FogManager getFogManager() {
-		return FOG_MANAGER;
-	}
+	// Forest Spec Task 1 — Crepuscular Rays. Owns a small position cache for
+	// its sky-visibility check (added in the review fix pass), so unlike a
+	// purely stateless calculation it needs the same reset() treatment as
+	// FOG_MANAGER/SKY_COLOR_CONTROLLER below — see both lifecycle points.
+	// intensity/red/green/blue/sunHeight/sinAngle are still fully
+	// recomputed every frame regardless; only the position cache persists.
+	private static final CrepuscularRayController  CREPUSCULAR_RAY_CONTROLLER = new CrepuscularRayController();
+
+	// Cell Grid (Chapter 6 / Appendix F §3). Owns spatial cell lifecycle and
+	// Horizon Map generation only — no SunReach, Confidence, Illumination,
+	// or Cluster data. Driven once per frame here, same pattern as every
+	// other controller in this class. reset() is called at both existing
+	// lifecycle points below so stale terrain/biome data cannot leak across
+	// a dimension change or disconnect.
+	private static final CellGrid CELL_GRID = new CellGrid();
+
+	// skyContext is written once per frame at WorldRenderEvents.START and read
+	// by SkyMixin. Nulled on disconnect and dimension change so SkyMixin's
+	// null check catches the gap before the next valid frame.
+	private static FogContext skyContext = null;
+
+	// Delta time for sky color smoothing.
+	// Computed once per frame at WorldRenderEvents.START.
+	// Capped at 0.1s to protect against alt-tab and load spikes.
+	private static float skyDeltaSec  = 0f;
+	private static long  skyLastNanos = -1L;
+
+	// Dimension tracking for mid-session change detection.
+	// Portal travel does not fire DISCONNECT — we must detect it here.
+	// Null on startup and after disconnect so the first frame always
+	// initialises the dimension key without triggering a spurious reset.
+	private static ResourceKey<Level> currentDimension = null;
 
 	@Override
 	public void onInitializeClient() {
-		// Client init — nothing needed yet.
-		// Future: register keybinds, config, event listeners.
+		AtmosConfig.load();
+		ShaderDetector.init();
+		CrepuscularRayRenderer.init();
+
+		WorldRenderEvents.START.register(context -> {
+			Minecraft mc = Minecraft.getInstance();
+			if (mc.level == null || mc.cameraEntity == null) return;
+
+			// Publish the per-frame CameraSnapshot first — every other system
+			// that reads camera state this frame (currently none; future:
+			// Confidence, Exposure, PES) depends on this being fresh before
+			// they run. Per Appendix F §1, this is the single Render Thread
+			// writer call site.
+			//
+			// NOTE: this snapshot must remain valid for the rest of the
+			// frame, including the dimension-change branch below. Do not
+			// call CameraManager.reset() anywhere after this point within
+			// the same frame — see CameraManager's class doc.
+			CameraManager.publish(context);
+
+			// Reset the sky drifter advance guard at the start of each frame.
+			// Must be called before any getSkyColor() can fire — WorldRenderEvents.START
+			// is the earliest safe point in the render pipeline.
+			SKY_COLOR_CONTROLLER.beginFrame();
+
+			// --- Dimension change detection ---
+			// Portal travel changes mc.level without firing DISCONNECT.
+			// Detect the dimension key mismatch and reset all atmospheric
+			// state before capturing the new context — prevents Overworld
+			// drifter values from bleeding into the Nether/End and vice versa.
+			//
+			// CameraManager.reset() is intentionally NOT called here. The
+			// CameraSnapshot published above this block is still a valid,
+			// fully-formed snapshot of the current camera for this frame —
+			// dimension change does not invalidate camera geometry, only
+			// world/environmental state. Resetting it here would destroy
+			// the frame's just-published snapshot for no correctness reason.
+			// CameraManager.reset() is reserved for genuine teardown
+			// (disconnect) — see the DISCONNECT handler below.
+			ResourceKey<Level> newDimension = mc.level.dimension();
+			if (currentDimension != null && !currentDimension.equals(newDimension)) {
+				FOG_MANAGER.reset();
+				SKY_COLOR_CONTROLLER.reset();
+				CREPUSCULAR_RAY_CONTROLLER.reset();
+				CELL_GRID.reset();
+				skyContext   = null;
+				skyLastNanos = -1L;
+				skyDeltaSec  = 0f;
+				// FogManager.reset() already calls FogContext.clearBiomeCache()
+				// so the stale Overworld dominant-biome reference is cleared.
+			}
+			currentDimension = newDimension;
+
+			// Capture sky context and advance environmental state together at
+			// render start — before getSkyColor() can be called by the vanilla
+			// renderer. Guarantees skyContext and envState are always from the
+			// same frame moment.
+			//
+			// FogManager.update() is safe to call here because its UPDATE_GUARD_NS
+			// (2ms) will block the redundant call from FogMixin.setupFog() later
+			// in the same frame — no double update, no side effects.
+			skyContext = FogContext.capture(mc.gameRenderer.getMainCamera(), mc.level);
+			FOG_MANAGER.update(mc.gameRenderer.getMainCamera(), mc.level);
+
+			// Cell Grid: movement-gated internally (no-op unless the camera has
+			// crossed into a new center cell since the last call), so calling
+			// it unconditionally every frame is cheap — same pattern as every
+			// other controller above.
+			CELL_GRID.update(mc.level, mc.gameRenderer.getMainCamera().getBlockPosition());
+
+			// Crepuscular ray intensity reads the same frame-fresh skyContext
+			// and envState as everything else above — single per-frame call
+			// site, same pattern as FOG_MANAGER.update(). Openness is the
+			// already hysteresis-blended value (review Fix 2) — FOG_MANAGER
+			// has already run its update() above this line, so renderState
+			// (and therefore getFogOpenness()) is fresh for this frame.
+			//
+			// Fog RGB passed so CrepuscularRayController can derive ray color
+			// from the current atmospheric state rather than a fixed warm-gold.
+			// These are the same pipeline-smoothed values the fog system
+			// renders — they already encode dawn warmth, storm grey, rain
+			// desaturation via the full modifier pipeline.
+			CREPUSCULAR_RAY_CONTROLLER.update(
+					skyContext,
+					FOG_MANAGER.getEnvState(),
+					FOG_MANAGER.getFogOpenness(),
+					FOG_MANAGER.getFogRed(),
+					FOG_MANAGER.getFogGreen(),
+					FOG_MANAGER.getFogBlue()
+			);
+
+			long now     = System.nanoTime();
+			skyDeltaSec  = (skyLastNanos < 0) ? 0f
+					: Math.min((now - skyLastNanos) / 1_000_000_000f, 0.1f);
+			skyLastNanos = now;
+		});
+
+		// Reset all atmospheric state on disconnect.
+		// Dimension tracking cleared so the next session's first frame
+		// initialises cleanly without a spurious reset.
+		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
+			FOG_MANAGER.reset();
+			SKY_COLOR_CONTROLLER.reset();
+			CREPUSCULAR_RAY_CONTROLLER.reset();
+			CameraManager.reset();
+			CELL_GRID.reset();
+			skyContext        = null;
+			skyLastNanos      = -1L;
+			skyDeltaSec       = 0f;
+			currentDimension  = null;
+		});
 	}
+
+	public static FogManager               getFogManager()               { return FOG_MANAGER;               }
+	public static SkyColorController       getSkyColorController()       { return SKY_COLOR_CONTROLLER;      }
+	public static SunGlareController       getSunGlareController()       { return SUN_GLARE_CONTROLLER;      }
+	public static MoonlightController      getMoonlightController()      { return MOONLIGHT_CONTROLLER;      }
+	public static CrepuscularRayController getCrepuscularRayController() { return CREPUSCULAR_RAY_CONTROLLER; }
+	public static CellGrid                 getCellGrid()                 { return CELL_GRID;                 }
+
+	public static FogContext getSkyContext()   { return skyContext;  }
+	public static float      getSkyDeltaSec() { return skyDeltaSec; }
 }

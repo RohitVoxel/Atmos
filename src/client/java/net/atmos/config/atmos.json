@@ -1,0 +1,27 @@
+{
+  "fog": {
+    "fogIntensity": 1.0,
+    "weatherIntensity": 1.0,
+    "transitionSpeed": 0.42,
+    "nightFogStrength": 1.0,
+    "biomeFogBlending": true,
+
+    "visibilityFloorEnabled": true,
+    "visibilityFloorFraction": 0.45,
+    "visibilityFloorAbsolute": 24.0,
+
+    "fogEnabled": true,
+    "skyEnabled": true,
+    "weatherEffects": true,
+    "valleyFog": true,
+    "dryAtmosphere": true,
+    "nightCompression": true,
+    "crepuscularRays": true
+  },
+
+  "debug": {
+    "overlayEnabled": false,
+    "logBiomeChanges": false,
+    "logModifierValues": false
+  }
+}

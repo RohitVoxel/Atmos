@@ -3,27 +3,23 @@
 	"id": "atmos",
 	"version": "${version}",
 	"name": "Atmos",
-	"description": "This is an example description! Tell everyone what your mod is about!",
+	"description": "Cinematic atmosphere and environmental immersion for Minecraft. Dynamic fog, biome-aware sky, weather effects, and valley mist.",
 	"authors": [
 		"Rohit"
 	],
 	"contact": {
-		"homepage": "https://fabricmc.net/",
-		"sources": "https://github.com/FabricMC/fabric-example-mod"
+		"homepage": "",
+		"sources": ""
 	},
 	"license": "CC0-1.0",
 	"icon": "assets/atmos/icon.png",
-	"environment": "*",
+	"environment": "client",
 	"entrypoints": {
-		"main": [
-			"net.atmos.Atmos"
-		],
 		"client": [
-          "net.atmos.core.AtmosClient"
+			"net.atmos.core.AtmosClient"
 		]
 	},
 	"mixins": [
-		"atmos.mixins.json",
 		{
 			"config": "atmos.client.mixins.json",
 			"environment": "client"

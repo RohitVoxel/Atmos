@@ -3,3 +3,12 @@
 /build/
 /build/classes/java/client/
 /build/classes/java/main/
+
+.gradle/
+build/
+run/
+out/
+.idea/
+*.iml
+logs/
+crash-reports/

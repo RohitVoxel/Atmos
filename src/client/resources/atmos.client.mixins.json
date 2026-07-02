@@ -3,8 +3,11 @@
 	"package": "net.atmos.mixin",
 	"compatibilityLevel": "JAVA_21",
 	"client": [
-		"FogMixin"
+		"FogMixin",
+		"SkyMixin"
 	],
+
+
 	"injectors": {
 		"defaultRequire": 1
 	},
