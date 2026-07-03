@@ -2,8 +2,6 @@ package net.atmos.core;
 
 import net.atmos.atmosphere.fog.FogContext;
 import net.atmos.atmosphere.fog.FogManager;
-import net.atmos.atmosphere.light.CrepuscularRayController;
-import net.atmos.atmosphere.light.CrepuscularRayRenderer;
 import net.atmos.atmosphere.sky.MoonlightController;
 import net.atmos.atmosphere.sky.SkyColorController;
 import net.atmos.atmosphere.sky.SunGlareController;
@@ -30,7 +28,6 @@ public class AtmosClient implements ClientModInitializer {
 	// FOG_MANAGER/SKY_COLOR_CONTROLLER below — see both lifecycle points.
 	// intensity/red/green/blue/sunHeight/sinAngle are still fully
 	// recomputed every frame regardless; only the position cache persists.
-	private static final CrepuscularRayController  CREPUSCULAR_RAY_CONTROLLER = new CrepuscularRayController();
 
 	// Cell Grid (Chapter 6 / Appendix F §3). Owns spatial cell lifecycle and
 	// Horizon Map generation only — no SunReach, Confidence, Illumination,
@@ -61,7 +58,6 @@ public class AtmosClient implements ClientModInitializer {
 	public void onInitializeClient() {
 		AtmosConfig.load();
 		ShaderDetector.init();
-		CrepuscularRayRenderer.init();
 
 		WorldRenderEvents.START.register(context -> {
 			Minecraft mc = Minecraft.getInstance();
@@ -102,7 +98,6 @@ public class AtmosClient implements ClientModInitializer {
 			if (currentDimension != null && !currentDimension.equals(newDimension)) {
 				FOG_MANAGER.reset();
 				SKY_COLOR_CONTROLLER.reset();
-				CREPUSCULAR_RAY_CONTROLLER.reset();
 				CELL_GRID.reset();
 				skyContext   = null;
 				skyLastNanos = -1L;
@@ -141,14 +136,7 @@ public class AtmosClient implements ClientModInitializer {
 			// These are the same pipeline-smoothed values the fog system
 			// renders — they already encode dawn warmth, storm grey, rain
 			// desaturation via the full modifier pipeline.
-			CREPUSCULAR_RAY_CONTROLLER.update(
-					skyContext,
-					FOG_MANAGER.getEnvState(),
-					FOG_MANAGER.getFogOpenness(),
-					FOG_MANAGER.getFogRed(),
-					FOG_MANAGER.getFogGreen(),
-					FOG_MANAGER.getFogBlue()
-			);
+
 
 			long now     = System.nanoTime();
 			skyDeltaSec  = (skyLastNanos < 0) ? 0f
@@ -162,7 +150,6 @@ public class AtmosClient implements ClientModInitializer {
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
 			FOG_MANAGER.reset();
 			SKY_COLOR_CONTROLLER.reset();
-			CREPUSCULAR_RAY_CONTROLLER.reset();
 			CameraManager.reset();
 			CELL_GRID.reset();
 			skyContext        = null;
@@ -176,7 +163,6 @@ public class AtmosClient implements ClientModInitializer {
 	public static SkyColorController       getSkyColorController()       { return SKY_COLOR_CONTROLLER;      }
 	public static SunGlareController       getSunGlareController()       { return SUN_GLARE_CONTROLLER;      }
 	public static MoonlightController      getMoonlightController()      { return MOONLIGHT_CONTROLLER;      }
-	public static CrepuscularRayController getCrepuscularRayController() { return CREPUSCULAR_RAY_CONTROLLER; }
 	public static CellGrid                 getCellGrid()                 { return CELL_GRID;                 }
 
 	public static FogContext getSkyContext()   { return skyContext;  }
