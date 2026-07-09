@@ -30,6 +30,13 @@ import net.atmos.atmosphere.fog.biome.BiomeTraits;
  *
  * Flash probability is frame-rate independent: chance = thunder * stormEnergy
  * * FLASH_RATE * deltaSec. At full storm ~0.10 flashes/second on average.
+ *
+ * Access pattern note: public fields remain the primary access path for
+ * existing consumers (documented precedent in TierAEvaluator's class doc).
+ * getHumidityMass() is an additive accessor for consumers outside this
+ * chapter's original call-site set (e.g. net.atmos.director) that prefer
+ * accessor-based reads per Chapter 17's "hide internal implementation"
+ * guidance — it does not replace or deprecate the public field.
  */
 public final class EnvironmentalState {
 
@@ -162,6 +169,7 @@ public final class EnvironmentalState {
         return (float) Math.pow(FogMath.clamp(rain, 0f, 1f), 1.8f);
     }
 
+    public float getHumidityMass()  { return humidityMass;  }
     public float getSkyMoisture()   { return skyMoisture;   }
     public float getStormEnergy()   { return stormEnergy;   }
     public float getNightDepth()    { return nightDepth;    }
