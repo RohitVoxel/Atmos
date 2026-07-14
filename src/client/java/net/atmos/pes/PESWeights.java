@@ -33,21 +33,11 @@ public final class PESWeights {
     public static final int HISTORY_BUFFER_CAPACITY = 300;
 
     // --- Stage 3: Composition Evaluation (§12.14) ---
-    // No numeric anchor exists in §12.14 for these saturation points —
-    // implementation-defined, same status as the tolerances above.
-    // A coefficient of variation at or above this value scores 1.0
-    // (maximum variety).
     public static final float COMPOSITION_RADIUS_VARIETY_SATURATION    = 0.35f;
     public static final float COMPOSITION_INTENSITY_VARIETY_SATURATION = 0.35f;
     public static final float COMPOSITION_SPACING_VARIETY_SATURATION   = 0.50f;
 
     // --- Stage 4: Overall Perceptual Score (§12.29) ---
-    // §12.29 explicitly leaves aggregation "conceptual rather than a
-    // rigid mathematical formula" — no anchor exists for these weights.
-    // All are initialized equal (1.0f), reproducing a plain unweighted
-    // mean exactly; only these constants need to change for future
-    // tuning, per the ConfidenceWeights/DirectorWeights/CompositionWeights
-    // precedent of centralizing every tunable value in one place.
     public static final float OVERALL_WEIGHT_ENVIRONMENTAL_CONSISTENCY = 1.0f;
     public static final float OVERALL_WEIGHT_BIOME_IDENTITY            = 1.0f;
     public static final float OVERALL_WEIGHT_WEATHER_IDENTITY          = 1.0f;
@@ -56,10 +46,6 @@ public final class PESWeights {
     public static final float OVERALL_WEIGHT_PATTERN_NON_REPETITION    = 1.0f;
     public static final float OVERALL_WEIGHT_COMPOSITION               = 1.0f;
 
-    /**
-     * Self-normalizing — always reflects the sum of the weights above,
-     * so OverallScoreEvaluator never needs updating when a weight changes.
-     */
     public static final float OVERALL_WEIGHT_TOTAL =
             OVERALL_WEIGHT_ENVIRONMENTAL_CONSISTENCY
                     + OVERALL_WEIGHT_BIOME_IDENTITY
@@ -68,4 +54,12 @@ public final class PESWeights {
                     + OVERALL_WEIGHT_TRANSITION
                     + OVERALL_WEIGHT_PATTERN_NON_REPETITION
                     + OVERALL_WEIGHT_COMPOSITION;
+
+    // --- Stage 5: Motion Evaluation (§12.26) ---
+    // No numeric anchor exists in §12.26 for either the window size or the
+    // "rapid" distance threshold. Threshold is expressed in blocks per
+    // history step (Hero anchor displacement), not blocks/second — see
+    // MotionEvaluator's class doc for why a real speed unit isn't derivable.
+    public static final int   MOTION_WINDOW_SIZE = 8;
+    public static final float MOTION_RAPID_TRAVERSAL_THRESHOLD = 24f;
 }

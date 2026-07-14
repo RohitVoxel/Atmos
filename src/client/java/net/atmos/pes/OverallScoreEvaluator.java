@@ -7,10 +7,7 @@ package net.atmos.pes;
  * rather than as a rigid mathematical formula" — no formula or weighting
  * scheme is specified anywhere in Chapter 12 or its appendices. A
  * weighted arithmetic mean is used here, with every weight centralized
- * in PESWeights (mirroring ConfidenceWeights / DirectorWeights /
- * CompositionWeights) rather than hardcoded in this class. All weights
- * are currently equal, which reproduces a plain arithmetic mean exactly
- * — this is a future-proofing change, not a behavioral one.
+ * in PESWeights.
  *
  * Color Harmony (§12.17), Contrast (§12.18), Depth (§12.19), and
  * Exposure Evaluation (§12.25) are excluded — all require Exposure Model
@@ -20,6 +17,26 @@ package net.atmos.pes;
  * Pattern Repetition contributes as a non-repetitiveness score
  * (1 - repetitionRatio when sampled) rather than its raw boolean flag,
  * so a single flip does not zero out the entire average.
+ *
+ * --- Motion gating (§12.26 Stage 6) ---
+ *
+ * Per §12.26 ("Elytra Flight -> Rapid Spatial Traversal -> Disable
+ * Spatial Repetition Checks -> Shift Evaluation to Temporal Stability"),
+ * when {@code motion.rapidTraversal()} is true the Pattern Repetition
+ * term is neutralized to 1.0 (no penalty, no reward) instead of being
+ * derived from repetitionRatio(). PatternRepetitionResult itself is
+ * never altered, recomputed, or replaced — PatternRepetitionEvaluator
+ * and MotionEvaluator each retain sole ownership of their own result
+ * type; this evaluator only decides whether the Pattern Repetition
+ * contribution is read at all.
+ *
+ * No additional weight is shifted onto Temporal Stability — no anchor
+ * exists anywhere in §12.26 for such a multiplier, and inventing one
+ * would be an unjustified coefficient. "Shift evaluation to Temporal
+ * Stability" is realized as the natural consequence of Pattern
+ * Repetition becoming a fixed, non-variable term during rapid travel:
+ * Temporal Stability (unaffected by movement rate) remains the dominant
+ * source of variance in the resulting score.
  */
 public final class OverallScoreEvaluator {
 
@@ -32,11 +49,10 @@ public final class OverallScoreEvaluator {
             TemporalStabilityResult temporalStability,
             TransitionResult transition,
             PatternRepetitionResult patternRepetition,
-            CompositionEvaluationResult compositionEvaluation) {
+            CompositionEvaluationResult compositionEvaluation,
+            MotionResult motion) {
 
-        float nonRepetitionScore = patternRepetition.sampledHeroEntries() > 0
-                ? 1f - Math.min(1f, patternRepetition.repetitionRatio())
-                : 1f;
+        float nonRepetitionScore = nonRepetitionScore(patternRepetition, motion);
 
         float weightedSum =
                 environmentalConsistency.value() * PESWeights.OVERALL_WEIGHT_ENVIRONMENTAL_CONSISTENCY
@@ -48,5 +64,14 @@ public final class OverallScoreEvaluator {
                         + compositionEvaluation.value()  * PESWeights.OVERALL_WEIGHT_COMPOSITION;
 
         return weightedSum / PESWeights.OVERALL_WEIGHT_TOTAL;
+    }
+
+    private static float nonRepetitionScore(PatternRepetitionResult patternRepetition, MotionResult motion) {
+        if (motion.rapidTraversal()) {
+            return 1f;
+        }
+        return patternRepetition.sampledHeroEntries() > 0
+                ? 1f - Math.min(1f, patternRepetition.repetitionRatio())
+                : 1f;
     }
 }

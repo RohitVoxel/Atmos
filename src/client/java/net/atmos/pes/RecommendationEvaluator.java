@@ -10,6 +10,14 @@ import java.util.Set;
  * per-category pass/fail signals — no new inputs, no rendering access,
  * no write-back (§12.33, Appendix D §4). Deterministic: identical
  * category results always produce an identical recommendation set.
+ *
+ * --- Motion gating (§12.26 Stage 6) ---
+ *
+ * Per §12.26, INCREASE_VARIATION is suppressed during rapid spatial
+ * traversal — Hero anchor recurrence during fast Elytra flight is not
+ * meaningful repetition. PatternRepetitionResult is read exactly as
+ * produced by PatternRepetitionEvaluator; MotionResult only gates
+ * whether its flag is consulted here.
  */
 public final class RecommendationEvaluator {
 
@@ -22,7 +30,8 @@ public final class RecommendationEvaluator {
             TemporalStabilityResult temporalStability,
             TransitionResult transition,
             PatternRepetitionResult patternRepetition,
-            CompositionEvaluationResult compositionEvaluation) {
+            CompositionEvaluationResult compositionEvaluation,
+            MotionResult motion) {
 
         EnumSet<PerceptualRecommendation> recommendations = EnumSet.noneOf(PerceptualRecommendation.class);
 
@@ -38,7 +47,7 @@ public final class RecommendationEvaluator {
         if (temporalStability.value() < PESWeights.CATEGORY_PASS_THRESHOLD || !transition.smooth()) {
             recommendations.add(PerceptualRecommendation.SMOOTH_TRANSITIONS);
         }
-        if (patternRepetition.repetitive()) {
+        if (!motion.rapidTraversal() && patternRepetition.repetitive()) {
             recommendations.add(PerceptualRecommendation.INCREASE_VARIATION);
         }
 
