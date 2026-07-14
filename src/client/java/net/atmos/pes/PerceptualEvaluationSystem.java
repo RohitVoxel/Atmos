@@ -5,20 +5,22 @@ import net.atmos.atmosphere.fog.biome.BiomeTraits;
 import net.atmos.composition.Composition;
 
 /**
- * PES orchestration entry point — Chapter 12 Stage 1+2 scope only.
+ * PES orchestration entry point — Chapter 12 Stage 1-4 scope.
  *
- * Implements §12.39's lifecycle order for the implemented categories:
- * evaluate against the buffer's existing entries, then append the
- * current frame, then return the report ("publish"). Owns the
- * PESHistoryBuffer mutation per §12.10; every evaluator invoked here
- * remains a stateless pure function of its arguments, reading history
- * only through the zero-allocation {@link PESHistoryView} interface — no
- * evaluator materializes a copy of the buffer's contents.
+ * Stage 3 adds Composition Evaluation (§12.14). Stage 4 adds the Overall
+ * Perceptual Score (§12.29) and the Recommendation Engine (§12.32),
+ * completing every PerceptualReport field within this task's approved
+ * scope. visualFatigueEstimate remains deferred — see PerceptualReport's
+ * class doc.
  *
- * Not implemented: AtomicReference-based snapshot publication (§12.31 —
- * no EnvironmentalState/Composition snapshot bus exists yet), Lighting
- * Direction Validation (§12.15 — Cluster carries no direction field),
- * overallBelievabilityScore / recommendations (see PerceptualReport).
+ * Lifecycle order unchanged from §12.39: evaluate against the buffer's
+ * existing entries, append the current frame, then publish. Composition
+ * Evaluation and the Overall Score / Recommendations do not read
+ * PESHistoryBuffer and are evaluated alongside the history-dependent
+ * categories in the same pass, before the current frame is pushed.
+ *
+ * Not implemented: AtomicReference-based snapshot publication (§12.31),
+ * Lighting Direction Validation (§12.15), visualFatigueEstimate (§12.23).
  * Not wired into AtmosClient, FogManager, CompositionEngine, or
  * AtmosphereDirector — no such integration was authorized for this task.
  */
@@ -50,12 +52,23 @@ public final class PerceptualEvaluationSystem {
                 TransitionEvaluator.evaluate(history, current);
         PatternRepetitionResult patternRepetition =
                 PatternRepetitionEvaluator.evaluate(history, current);
+        CompositionEvaluationResult compositionEvaluation =
+                CompositionEvaluator.evaluate(composition);
+
+        float overallBelievabilityScore = OverallScoreEvaluator.evaluate(
+                environmentalConsistency, biomeIdentity, weatherIdentity,
+                temporalStability, transition, patternRepetition, compositionEvaluation);
+
+        var recommendations = RecommendationEvaluator.evaluate(
+                environmentalConsistency, biomeIdentity, weatherIdentity,
+                temporalStability, transition, patternRepetition, compositionEvaluation);
 
         history.push(current);
 
         return new PerceptualReport(
                 environmentalConsistency, biomeIdentity, weatherIdentity,
                 temporalStability, transition, patternRepetition,
+                compositionEvaluation, overallBelievabilityScore, recommendations,
                 evaluationSequence
         );
     }
