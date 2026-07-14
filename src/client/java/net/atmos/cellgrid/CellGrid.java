@@ -40,6 +40,11 @@ import java.util.Set;
  * Horizon Map generation cost is bounded because it only runs once per cell
  * on first creation, or once per cell when explicitly marked dirty and next
  * touched — never on a fixed timer, never for cells outside the active radius.
+ *
+ * Because active/cached both store AtmosCell references (not copies),
+ * per-cell Historical Memory (Chapter 13 §13.9, AtmosCell.advanceMemory)
+ * automatically travels with a cell across active/cached promotion and
+ * demotion — no additional lifecycle handling was required here for that.
  */
 public final class CellGrid {
 
@@ -161,6 +166,11 @@ public final class CellGrid {
     /** Read-only view of all currently active cells. */
     public Collection<AtmosCell> getActiveCells() {
         return Collections.unmodifiableCollection(active.values());
+    }
+
+    /** Current monotonic simulation tick, per Appendix F 2.0 §13.9 ("Last Update Time"). */
+    public long currentTick() {
+        return tickCounter;
     }
 
     /**
