@@ -1,5 +1,7 @@
 package net.atmos.cellgrid;
 
+import net.atmos.memory.AtmosphericMemoryPersistenceService;
+import net.atmos.memory.MemoryDiagnostics;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
@@ -44,7 +46,28 @@ import java.util.Set;
  * Because active/cached both store AtmosCell references (not copies),
  * per-cell Historical Memory (Chapter 13 §13.9, AtmosCell.advanceMemory)
  * automatically travels with a cell across active/cached promotion and
- * demotion — no additional lifecycle handling was required here for that.
+ * demotion — no additional lifecycle handling was required for that.
+ *
+ * --- Persistence integration (Appendix F 2.0 §13.12–§13.19) ---
+ *
+ * A cell that survives the active<->cached round trip never touches disk —
+ * the cache tier already satisfies "Historical Data must travel with [the
+ * cell]" (§13.9) entirely in memory. Disk persistence exists specifically
+ * for the case the cache tier cannot cover: a cell evicted from the
+ * bounded cache tier entirely (LRU overflow beyond MAX_CACHED_CELLS), or a
+ * full session/dimension teardown ({@link #reset}/{@link #shutdown}). Both
+ * hooks enqueue a Copy-on-Enqueue snapshot (Appendix F 2.0 §2.1) rather
+ * than writing synchronously — see AtmosphericMemoryPersistenceService.
+ *
+ * On cell creation, {@link #createCell} first asks the persistence layer
+ * to reclaim any still-pending write for this exact coordinate (§13.15
+ * player re-entry — no disk read needed), then, failing that, fires an
+ * async load request. A load completing after the cell already exists is
+ * applied on a later {@link #update} call via {@link #drainMemoryLoadResults}.
+ *
+ * for a load result that completed but was not yet drained before it
+ * captures the eviction snapshot, so a write can never overwrite a
+ * just-arrived, not-yet-applied load with stale in-memory defaults.
  */
 public final class CellGrid {
 
@@ -62,11 +85,42 @@ public final class CellGrid {
 
     private final Map<CellCoord, AtmosCell> active = new HashMap<>();
 
+    /**
+     * Not final (audit Finding F fix): {@link #shutdown} cleanly drains
+     * and stops this instance's background thread at genuine session
+     * teardown, then replaces it with a fresh instance so a subsequent
+     * reconnect within the same client session has a usable persistence
+     * layer again. {@code removeEldestEntry} below reads this field at
+     * call time (not a captured local), so the replacement is picked up
+     * correctly without any further change.
+     */
+    private AtmosphericMemoryPersistenceService memoryPersistence = new AtmosphericMemoryPersistenceService();
+
+    /** Set by {@link #update}; retained across {@link #reset} until overwritten, so reset can flush using the outgoing dimension. */
+    private String currentDimensionKey = null;
+
     private final LinkedHashMap<CellCoord, AtmosCell> cached =
             new LinkedHashMap<>(64, 0.75f, true) {
                 @Override
                 protected boolean removeEldestEntry(Map.Entry<CellCoord, AtmosCell> eldest) {
-                    return size() > MAX_CACHED_CELLS;
+                    boolean evict = size() > MAX_CACHED_CELLS;
+                    if (evict && currentDimensionKey != null) {
+                        AtmosCell cell = eldest.getValue();
+
+                        // Finding H fix: apply any load result that
+                        // completed but was not yet drained this frame,
+                        // so the eviction write reflects the freshest
+                        // known data rather than stale in-memory
+                        // defaults that would otherwise silently
+                        // overwrite a just-persisted, just-read file.
+                        memoryPersistence.pollLoadedResult(currentDimensionKey, cell.coord())
+                                .ifPresent(snapshot -> cell.absorbLoadedMemory(
+                                        snapshot.humidityMemory(), snapshot.stormInfluence(), snapshot.lastMemoryUpdateTick()));
+
+                        memoryPersistence.enqueueEviction(currentDimensionKey, cell.coord(),
+                                cell.humidityMemory(), cell.stormInfluence(), cell.lastMemoryUpdateTick());
+                    }
+                    return evict;
                 }
             };
 
@@ -94,13 +148,16 @@ public final class CellGrid {
     /**
      * Advances the Cell Grid for the current frame/tick. Cheap no-op unless
      * the camera has moved into a different center cell since the last call,
-     * except for a lightweight dirty-cell sweep which always runs.
+     * except for a lightweight dirty-cell sweep and load-result drain which
+     * always run (both are O(1) in the common no-work case).
      *
      * @param level     current client level, used for biome/heightmap sampling.
      * @param cameraPos current camera block position.
      */
     public void update(ClientLevel level, BlockPos cameraPos) {
         tickCounter++;
+        currentDimensionKey = level.dimension().location().toString();
+        drainMemoryLoadResults();
 
         CellCoord center = CellCoord.fromWorld(
                 cameraPos.getX(), cameraPos.getY(), cameraPos.getZ(), CELL_SIZE);
@@ -173,6 +230,11 @@ public final class CellGrid {
         return tickCounter;
     }
 
+    /** Read-only persistence-layer health snapshot — Chapter 13 §13.19. */
+    public MemoryDiagnostics memoryDiagnostics() {
+        return memoryPersistence.diagnostics();
+    }
+
     /**
      * Returns the active face-adjacent neighbor cells of the given
      * coordinate (Chapter 6 §26). Neighbors outside the active set are
@@ -220,14 +282,58 @@ public final class CellGrid {
      * other Atmos controller's reset() — disconnect and dimension change —
      * so stale terrain/biome data from a previous world/dimension cannot
      * leak into the next one.
+     *
+     * Per Appendix F 2.0 §13.12 ("persisted to disk so the atmosphere
+     * remains continuous across play sessions"), every active and cached
+     * cell's Historical Data is flushed to the persistence layer before
+     * the collections are cleared, using the dimension key captured by the
+     * most recent {@link #update} call (the outgoing dimension, since the
+     * next update() call will supply the new one before any cell is
+     * created there).
+     *
+     * {@link #drainMemoryLoadResults()} is called immediately before
+     * building the flush lists (Finding H fix, flush-path half): the same
+     * staleness risk that applies to a single eviction write applies to a
+     * bulk flush too — this guarantees every flushed snapshot reflects
+     * the freshest known data rather than a still-default value sitting
+     * next to an unclaimed, already-completed load result.
+     *
+     * Does not stop the persistence layer's background thread — see
+     * {@link #shutdown()} for genuine session teardown. Dimension change
+     * calls this method alone, since the persistence layer must remain
+     * alive for the next dimension.
      */
     public void reset() {
+        if (currentDimensionKey != null) {
+            drainMemoryLoadResults();
+            memoryPersistence.flush(currentDimensionKey, active.values());
+            memoryPersistence.flush(currentDimensionKey, cached.values());
+        }
+
         active.clear();
         cached.clear();
         dirtyCoords.clear();
         hasDirtyActiveCell = false;
         lastCenterCoord = null;
         tickCounter = 0L;
+        currentDimensionKey = null;
+    }
+
+    /**
+     * Genuine session teardown (Finding F fix) — call only on disconnect,
+     * never on a mid-session dimension change. Flushes and clears exactly
+     * as {@link #reset()} does, then gives the persistence layer's
+     * background thread a bounded grace period to finish whatever was
+     * just queued (including the flush batch) before stopping it, rather
+     * than leaving that work to the mercy of the daemon thread being
+     * killed abruptly by JVM exit. A fresh persistence service instance
+     * is installed afterward so a later reconnect within the same client
+     * session still has a working persistence layer.
+     */
+    public void shutdown() {
+        reset();
+        memoryPersistence.shutdown();
+        memoryPersistence = new AtmosphericMemoryPersistenceService();
     }
 
     // -------------------------------------------------------------------
@@ -267,6 +373,30 @@ public final class CellGrid {
         hasDirtyActiveCell = false;
     }
 
+    /**
+     * Applies any persisted Historical Data that finished loading
+     * asynchronously since the last call, to whichever cell — active or
+     * cached — currently occupies that coordinate. Guarded by
+     * {@link AtmosphericMemoryPersistenceService#hasLoadedResults()} so the
+     * common case (no completed loads pending) costs a single map
+     * emptiness check rather than a full active+cached scan (Chapter 6
+     * §12 — Cell Grid must remain a "cheap no-op" when there is no work).
+     */
+    private void drainMemoryLoadResults() {
+        if (currentDimensionKey == null || !memoryPersistence.hasLoadedResults()) return;
+
+        for (AtmosCell cell : active.values()) {
+            memoryPersistence.pollLoadedResult(currentDimensionKey, cell.coord())
+                    .ifPresent(snapshot -> cell.absorbLoadedMemory(
+                            snapshot.humidityMemory(), snapshot.stormInfluence(), snapshot.lastMemoryUpdateTick()));
+        }
+        for (AtmosCell cell : cached.values()) {
+            memoryPersistence.pollLoadedResult(currentDimensionKey, cell.coord())
+                    .ifPresent(snapshot -> cell.absorbLoadedMemory(
+                            snapshot.humidityMemory(), snapshot.stormInfluence(), snapshot.lastMemoryUpdateTick()));
+        }
+    }
+
     private AtmosCell createCell(CellCoord coord, ClientLevel level) {
         BlockPos centerPos = centerPos(coord);
 
@@ -276,7 +406,17 @@ public final class CellGrid {
 
         long seed = computeDeterministicSeed(level, coord, biome);
 
-        return new AtmosCell(coord, seed, biome, skyExposed, horizonMap, tickCounter);
+        AtmosCell cell = new AtmosCell(coord, seed, biome, skyExposed, horizonMap, tickCounter);
+
+        if (currentDimensionKey != null) {
+            memoryPersistence.reclaimPending(currentDimensionKey, coord).ifPresentOrElse(
+                    snapshot -> cell.absorbLoadedMemory(
+                            snapshot.humidityMemory(), snapshot.stormInfluence(), snapshot.lastMemoryUpdateTick()),
+                    () -> memoryPersistence.requestLoad(currentDimensionKey, coord)
+            );
+        }
+
+        return cell;
     }
 
     private void regenerate(AtmosCell cell, ClientLevel level) {
@@ -311,6 +451,10 @@ public final class CellGrid {
      * biome always produces an identical seed within a given world/dimension
      * session — it just cannot additionally distinguish two different worlds
      * that happen to share identical terrain, which true world seed would.
+     *
+     * The same dimension-key string also identifies the persistence
+     * directory used by Stage 3's disk storage (currentDimensionKey field
+     * above) — one stable identity, two consumers.
      */
     private long computeDeterministicSeed(ClientLevel level, CellCoord coord, Holder<Biome> biome) {
         String dimensionKey = level.dimension().location().toString();

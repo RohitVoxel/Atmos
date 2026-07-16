@@ -25,9 +25,14 @@ import net.minecraft.world.level.biome.Biome;
  *     - storm influence
  *     - last memory update tick
  *   Cell Grid stores and streams this data but does not interpret it —
- *   only net.atmos.memory.CellMemoryIntegrator may advance it (see
- *   advanceMemory()). Light Residue (also listed by Appendix F 2.0 §13.9)
- *   is deferred — see CellMemoryIntegrator's class doc.
+ *   only net.atmos.memory.CellMemoryIntegrator (live advancement) may
+ *   mutate it directly. Disk-loaded values reach this class exclusively
+ *   through {@link CellGrid}, the sole caller of {@link #absorbLoadedMemory}
+ *   (package-private, restricted to net.atmos.cellgrid) — the persistence
+ *   service itself never touches a live AtmosCell, only immutable
+ *   snapshots, per Appendix F 2.0's Copy-on-Enqueue contract. Light
+ *   Residue (also listed by Appendix F 2.0 §13.9) is deferred — see
+ *   CellMemoryIntegrator's class doc.
  *
  *   Explicitly NOT owned here — deferred to future systems per the approved
  *   task boundary, and intentionally absent rather than stubbed:
@@ -39,11 +44,11 @@ import net.minecraft.world.level.biome.Biome;
  *
  * Threading: mutable by necessity (Horizon Map is replaced on regeneration;
  * LRU touch timestamp updates on every access; Historical Memory advances
- * every frame), but all mutation is restricted to callers documented on
- * each method. Per Appendix D §11 (Unified Threading Model), Cell Grid is
- * owned exclusively by the Main/Simulation thread — this class is not
- * thread-safe and must not be accessed from the Render Thread or any
- * background thread.
+ * every frame and may be corrected once by an async disk load), but all
+ * mutation is restricted to callers documented on each method. Per
+ * Appendix D §11 (Unified Threading Model), Cell Grid is owned exclusively
+ * by the Main/Simulation thread — this class is not thread-safe and must
+ * not be accessed from the Render Thread or any background thread.
  */
 public final class AtmosCell {
 
@@ -123,6 +128,31 @@ public final class AtmosCell {
         humidityMemory = FogMath.clamp(humidityMemoryDrifter.advance(humidityTarget, deltaSec), 0f, 1f);
         stormInfluence = FogMath.clamp(stormInfluenceDrifter.advance(stormTarget, deltaSec), 0f, 1f);
         lastMemoryUpdateTick = tick;
+    }
+
+    /**
+     * Applies a persisted {@code CellMemorySnapshot} loaded asynchronously
+     * from disk (Appendix F 2.0 §13.9, §13.15). Snaps both drifters
+     * directly rather than blending — the same snap-on-authoritative-load
+     * idiom already used by {@code EnvironmentalState.snapToTargets} and
+     * {@code FogManager}'s first-frame drifter snap.
+     *
+     * Package-private: callable only from {@code net.atmos.cellgrid}. Its
+     * sole actual caller is {@link CellGrid}, which invokes it both when
+     * applying a completed async disk load and when reconciling an
+     * eviction write against a not-yet-drained load result (Chapter 13
+     * §13.15 re-entry, and the corresponding staleness guard on
+     * eviction). The persistence service in {@code net.atmos.memory}
+     * never calls this directly and never touches a live AtmosCell at
+     * all — it only ever hands CellGrid an immutable snapshot to apply,
+     * consistent with the Copy-on-Enqueue contract.
+     */
+    void absorbLoadedMemory(float humidityMemory, float stormInfluence, long tick) {
+        this.humidityMemory = FogMath.clamp(humidityMemory, 0f, 1f);
+        this.stormInfluence = FogMath.clamp(stormInfluence, 0f, 1f);
+        this.humidityMemoryDrifter.snap(this.humidityMemory);
+        this.stormInfluenceDrifter.snap(this.stormInfluence);
+        this.lastMemoryUpdateTick = tick;
     }
 
     // --- Package-private mutation, CellGrid-only ---

@@ -8,6 +8,7 @@ import net.atmos.atmosphere.sky.SunGlareController;
 import net.atmos.cellgrid.CellGrid;
 import net.atmos.compat.ShaderDetector;
 import net.atmos.config.AtmosConfig;
+import net.atmos.memory.CellMemoryIntegrator;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
@@ -32,10 +33,25 @@ public class AtmosClient implements ClientModInitializer {
 	// Cell Grid (Chapter 6 / Appendix F §3). Owns spatial cell lifecycle and
 	// Horizon Map generation only — no SunReach, Confidence, Illumination,
 	// or Cluster data. Driven once per frame here, same pattern as every
-	// other controller in this class. reset() is called at both existing
-	// lifecycle points below so stale terrain/biome data cannot leak across
-	// a dimension change or disconnect.
+	// other controller in this class.
+	//
+	// Lifecycle split (audit Finding F fix): dimension change calls
+	// CELL_GRID.reset() (flush only — persistence must stay alive for the
+	// next dimension). DISCONNECT calls CELL_GRID.shutdown() (flush, then
+	// bounded drain-and-stop of the persistence layer's background
+	// thread) — see both handlers below.
 	private static final CellGrid CELL_GRID = new CellGrid();
+
+	// Chapter 13 Stage 2/4 — per-cell Historical Memory advancement
+	// (net.atmos.memory.CellMemoryIntegrator). Reads EnvironmentalState via
+	// FOG_MANAGER.getEnvState() (Extend Before Creating — no new
+	// environmental source introduced). Owned independently of CellGrid,
+	// matching every other controller in this class; CellGrid itself never
+	// calls it (Chapter 13 §13.9 ownership boundary — see AtmosCell's
+	// class doc). No OptimizationPlan producer exists yet (Chapter 16 is
+	// unbuilt), so the unscaled overload is used, matching
+	// DirectorPerformanceEvaluator's null-safe failsafe precedent.
+	private static final CellMemoryIntegrator CELL_MEMORY_INTEGRATOR = new CellMemoryIntegrator();
 
 	// skyContext is written once per frame at WorldRenderEvents.START and read
 	// by SkyMixin. Nulled on disconnect and dimension change so SkyMixin's
@@ -94,11 +110,17 @@ public class AtmosClient implements ClientModInitializer {
 			// the frame's just-published snapshot for no correctness reason.
 			// CameraManager.reset() is reserved for genuine teardown
 			// (disconnect) — see the DISCONNECT handler below.
+			//
+			// CELL_GRID.reset() (not shutdown()) is deliberate here: the
+			// persistence layer's background thread must remain alive for
+			// the destination dimension. reset() still flushes the
+			// outgoing dimension's Historical Data before clearing.
 			ResourceKey<Level> newDimension = mc.level.dimension();
 			if (currentDimension != null && !currentDimension.equals(newDimension)) {
 				FOG_MANAGER.reset();
 				SKY_COLOR_CONTROLLER.reset();
 				CELL_GRID.reset();
+				CELL_MEMORY_INTEGRATOR.reset();
 				skyContext   = null;
 				skyLastNanos = -1L;
 				skyDeltaSec  = 0f;
@@ -142,16 +164,33 @@ public class AtmosClient implements ClientModInitializer {
 			skyDeltaSec  = (skyLastNanos < 0) ? 0f
 					: Math.min((now - skyLastNanos) / 1_000_000_000f, 0.1f);
 			skyLastNanos = now;
+
+			// Chapter 13 §13.9/§13.18 — per-cell Historical Memory
+			// advancement. Placed after skyDeltaSec is (re)computed above
+			// so this uses the current frame's delta rather than the
+			// previous frame's stale value.
+			CELL_MEMORY_INTEGRATOR.update(CELL_GRID, FOG_MANAGER.getEnvState(), skyDeltaSec);
 		});
 
 		// Reset all atmospheric state on disconnect.
 		// Dimension tracking cleared so the next session's first frame
 		// initialises cleanly without a spurious reset.
+		//
+		// CELL_GRID.shutdown() (audit Finding F fix, replacing the
+		// previous plain reset()): disconnect is genuine session
+		// teardown, not just a state reset — it flushes exactly as
+		// reset() does, then gives the persistence layer's background
+		// thread a bounded grace period to finish writing before it is
+		// stopped, rather than leaving that work to an abruptly-killed
+		// daemon thread if the client process exits shortly after. A
+		// fresh persistence service is installed internally so a later
+		// reconnect within the same client session still works.
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
 			FOG_MANAGER.reset();
 			SKY_COLOR_CONTROLLER.reset();
 			CameraManager.reset();
-			CELL_GRID.reset();
+			CELL_GRID.shutdown();
+			CELL_MEMORY_INTEGRATOR.reset();
 			skyContext        = null;
 			skyLastNanos      = -1L;
 			skyDeltaSec       = 0f;
