@@ -106,6 +106,7 @@ public final class AtmosphericMemoryPersistenceService {
         );
     }
 
+    private final AtomicLong evictionsEnqueued = new AtomicLong();
     /** Enqueues a Copy-on-Enqueue snapshot for background serialization. Never blocks. */
     public void enqueueEviction(String dimensionKey, CellCoord coord,
                                 float humidityMemory, float stormInfluence, long lastMemoryUpdateTick) {
@@ -113,8 +114,8 @@ public final class AtmosphericMemoryPersistenceService {
         CellMemorySnapshot snapshot = new CellMemorySnapshot(
                 dimensionKey, coord, humidityMemory, stormInfluence, lastMemoryUpdateTick);
         TrackedCellWrite tracked = new TrackedCellWrite(key, snapshot);
-
         inFlight.put(key, tracked);
+        evictionsEnqueued.incrementAndGet();
         ioExecutor.execute(new WriteTask(tracked));
     }
 
@@ -218,7 +219,10 @@ public final class AtmosphericMemoryPersistenceService {
                 loadsInFlight.size(),
                 loadResults.size(),
                 loadsCompleted.get(),
-                loadsDiscarded.get()
+                loadsDiscarded.get(),
+                evictionsEnqueued.get(),
+                fileStore.corruptedReadsDetected(),
+                !ioExecutor.isShutdown()
         );
     }
 

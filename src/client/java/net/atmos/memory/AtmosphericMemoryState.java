@@ -6,28 +6,15 @@ import net.atmos.atmosphere.EnvironmentalState;
 import net.atmos.atmosphere.fog.FogMath;
 
 /**
- * Global Atmospheric Memory — Chapter 13 Stage 1 (§13.1–§13.8), extended
- * in Stage 4 with Adaptive Performance cadence scaling (§13.18).
+ * Global Atmospheric Memory — Chapter 13 Stage 1, extended Stage 4
+ * (§13.18 cadence scaling) and Stage 5 (§13.17 failure recovery).
  *
- * Owns deterministic decay of memory channels that lag behind
- * EnvironmentalState's already-smoothed output (§13.4, §13.7). Reuses
- * {@link AtmosphereDrifter} as the decay engine (Extend Before Creating).
- *
- * Implements Humidity Memory and Storm Memory only (§13.6). Light /
- * Exposure Memory are omitted — no canonical global illumination signal
- * exists yet (Chapter 6 §24 and Chapter 14 are both documented elsewhere
- * in this codebase as "not yet built").
- *
- * §13.8's strict saturation bound is enforced by clamping every advance()
- * to [0,1] — AtmosphereDrifter alone permits slight overshoot, which is
- * appropriate for EnvironmentalState but not for Memory.
- *
- * Ownership (§13.5): exclusive owner of this state. Publishes an immutable
- * {@link AtmosphericMemorySnapshot}; nothing downstream may mutate it.
- * Not wired into AtmosClient — this channel has no disk-persistence
- * requirement anywhere in Chapter 13 (only per-cell Historical Data does,
- * per §13.9) and remains an in-memory-only smoothing layer awaiting a
- * future consumer, unchanged from Stage 1.
+ * §13.17: before any drifter is advanced, humidityMass/stormEnergy are
+ * checked for finiteness. A non-finite reading (e.g. an upstream chapter
+ * feeding an invalid value) is discarded for that cycle — the previous
+ * valid memory state is retained rather than being permanently poisoned,
+ * since AtmosphereDrifter itself has no NaN protection and this class
+ * does not own or modify that Chapter-5 primitive.
  */
 public final class AtmosphericMemoryState {
 
@@ -44,20 +31,13 @@ public final class AtmosphericMemoryState {
     private float humidityMemory = MemoryWeights.GLOBAL_HUMIDITY_MEMORY_DEFAULT;
     private float stormMemory    = MemoryWeights.GLOBAL_STORM_MEMORY_DEFAULT;
 
-    /** §13.18 cadence accumulator. Not part of the published snapshot. */
     private float accumulatedDeltaSec = 0f;
+    private long  invalidInputSkips   = 0L;
 
-    /** Unscaled — equivalent to a null OptimizationPlan (budget = 1.0, advances every call). */
     public AtmosphericMemorySnapshot advance(EnvironmentalState env, float deltaSec) {
         return advance(env, deltaSec, null);
     }
 
-    /**
-     * §13.18: reduced {@code optimizationPlan} budget lowers update
-     * frequency only. Every applied update still uses full-precision
-     * {@link AtmosphereDrifter} math over the full accumulated interval —
-     * mathematical precision is never reduced, only sampling rate.
-     */
     public AtmosphericMemorySnapshot advance(EnvironmentalState env, float deltaSec, OptimizationPlan optimizationPlan) {
         accumulatedDeltaSec += Math.max(0f, deltaSec);
 
@@ -68,18 +48,30 @@ public final class AtmosphericMemoryState {
         float appliedDeltaSec = accumulatedDeltaSec;
         accumulatedDeltaSec = 0f;
 
+        float humidityTarget = env.getHumidityMass();
+        float stormTarget    = env.getStormEnergy();
+        if (!Float.isFinite(humidityTarget) || !Float.isFinite(stormTarget)) {
+            invalidInputSkips++; // §13.17 — retain last valid memory state
+            return new AtmosphericMemorySnapshot(humidityMemory, stormMemory);
+        }
+
         humidityMemory = FogMath.clamp(
-                humidityMemoryDrifter.advance(env.getHumidityMass(), appliedDeltaSec), 0f, 1f);
+                humidityMemoryDrifter.advance(humidityTarget, appliedDeltaSec), 0f, 1f);
         stormMemory = FogMath.clamp(
-                stormMemoryDrifter.advance(env.getStormEnergy(), appliedDeltaSec), 0f, 1f);
+                stormMemoryDrifter.advance(stormTarget, appliedDeltaSec), 0f, 1f);
 
         return new AtmosphericMemorySnapshot(humidityMemory, stormMemory);
     }
 
-    /** Snaps both channels directly to current targets — avoids startup drift-in on first frame. */
     public void snapToTargets(EnvironmentalState env) {
-        humidityMemory = env.getHumidityMass();
-        stormMemory    = env.getStormEnergy();
+        float humidityTarget = env.getHumidityMass();
+        float stormTarget    = env.getStormEnergy();
+        if (!Float.isFinite(humidityTarget) || !Float.isFinite(stormTarget)) {
+            invalidInputSkips++; // §13.17 — retain existing defaults
+            return;
+        }
+        humidityMemory = humidityTarget;
+        stormMemory    = stormTarget;
         humidityMemoryDrifter.snap(humidityMemory);
         stormMemoryDrifter.snap(stormMemory);
     }
@@ -90,8 +82,12 @@ public final class AtmosphericMemoryState {
         humidityMemoryDrifter.snap(humidityMemory);
         stormMemoryDrifter.snap(stormMemory);
         accumulatedDeltaSec = 0f;
+        invalidInputSkips   = 0L;
     }
 
     public float humidityMemory() { return humidityMemory; }
     public float stormMemory()    { return stormMemory;    }
+
+    /** Chapter 13 §13.17/§13.19 — count of cycles where a non-finite input was rejected. */
+    public long invalidInputSkipCount() { return invalidInputSkips; }
 }

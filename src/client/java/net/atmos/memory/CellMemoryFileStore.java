@@ -14,28 +14,19 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 
 /**
  * Implementation-defined persistent storage for {@link CellMemorySnapshot}.
- * The Master Guide leaves storage strategy unspecified (Appendix F §6 /
- * Appendix F 2.0 §6 apply the same "implementation-defined, provided
- * architectural contracts hold" freedom here) — one file per cell under
- * {@code config/atmos/memory/<dimension>/} was chosen for simplicity.
+ * See prior class doc for storage-format rationale (unchanged).
  *
- * GZIP satisfies §13.16's "must be strictly lossless" compression
- * requirement. For this payload size (~18 bytes) the GZIP container
- * overhead exceeds the raw payload — this is a known, accepted tradeoff,
- * not a hidden one; see the class doc on
- * {@link AtmosphericMemoryPersistenceService} and the delivery report's
- * Hidden Assumption Audit. A future batched/region-file format (§13.20)
- * is the correct long-term fix and is out of scope here.
- *
- * Writes go through a temp file + atomic move so a crash mid-write can
- * never produce a file that reads back as corrupt (§13.17). Reads treat
- * any unreadable or version-mismatched file as absent rather than as a
- * fatal error, per §13.17's "ignore persisted history... rebuild" policy.
+ * Chapter 13 §13.17 (Failure Recovery): every rejection path below —
+ * format mismatch, invalid payload, or IO failure — is treated
+ * identically as "absent," per §13.17's "ignore persisted history"
+ * directive. {@link #corruptedReadsDetected} tracks how often this
+ * occurs, surfaced via {@link AtmosphericMemoryPersistenceService#diagnostics()}.
  */
 final class CellMemoryFileStore {
 
@@ -45,6 +36,7 @@ final class CellMemoryFileStore {
     private static final int FORMAT_VERSION = 1;
 
     private final Path root;
+    private final AtomicLong corruptedReadsDetected = new AtomicLong();
 
     CellMemoryFileStore() {
         this.root = FabricLoader.getInstance().getConfigDir().resolve("atmos").resolve("memory");
@@ -85,27 +77,42 @@ final class CellMemoryFileStore {
             int magic = data.readInt();
             int version = data.readInt();
             if (magic != MAGIC || version != FORMAT_VERSION) {
+                corruptedReadsDetected.incrementAndGet();
                 return Optional.empty(); // §13.17 — unrecognized data treated as absent
             }
             float humidityMemory = data.readFloat();
             float stormInfluence = data.readFloat();
             long lastMemoryUpdateTick = data.readLong();
 
+            if (!isValidMemoryValue(humidityMemory) || !isValidMemoryValue(stormInfluence)) {
+                corruptedReadsDetected.incrementAndGet();
+                LOGGER.debug("Atmos: discarding invalid cell memory payload for {}", coord);
+                return Optional.empty(); // §13.17 — invalid persisted memory ignored
+            }
+
             return Optional.of(new CellMemorySnapshot(
                     dimensionKey, coord, humidityMemory, stormInfluence, lastMemoryUpdateTick));
 
         } catch (IOException | RuntimeException corruptOrUnreadable) {
+            corruptedReadsDetected.incrementAndGet();
             LOGGER.debug("Atmos: discarding unreadable cell memory file {}", file);
             return Optional.empty();
         }
+    }
+
+    /** Cross-thread counter read (IO thread writes, Simulation Thread reads via diagnostics()). */
+    long corruptedReadsDetected() {
+        return corruptedReadsDetected.get();
+    }
+
+    private static boolean isValidMemoryValue(float v) {
+        return Float.isFinite(v) && v >= 0f && v <= 1f;
     }
 
     private void moveIntoPlace(Path tmp, Path file) throws IOException {
         try {
             Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
         } catch (java.nio.file.AtomicMoveNotSupportedException notSupported) {
-            // Some filesystems (network shares) reject ATOMIC_MOVE. Still
-            // correct, just no longer crash-atomic on those filesystems.
             Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING);
         }
     }
@@ -120,7 +127,6 @@ final class CellMemoryFileStore {
         try {
             Files.deleteIfExists(path);
         } catch (IOException ignored) {
-            // best-effort cleanup only
         }
     }
 }
