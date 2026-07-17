@@ -3,7 +3,7 @@ package net.atmos.pes;
 import java.util.Set;
 
 /**
- * PerceptualReport (Chapter 12 §12.8) — Stage 1-6 scope.
+ * PerceptualReport (Chapter 12 §12.8) — Stage 1-7 scope.
  *
  * Stage 3 added compositionEvaluation (§12.14). Stage 4 added
  * overallBelievabilityScore (§12.29) and recommendations (§12.32). Stage 5
@@ -25,12 +25,20 @@ import java.util.Set;
  * implemented does not change this: consuming Director state here would
  * cross an explicit ownership boundary, not merely fill a missing-data gap.
  *
- * Also still deferred: Color Harmony (§12.17), Contrast (§12.18), Depth
+ * Memory Evaluation (§12.24) is now implemented — Chapter 13 (Atmospheric
+ * Memory) is complete and frozen, and memoryEvaluation below reads its
+ * published AtmosphericMemorySnapshot exactly as instructed. §12.10's
+ * consumer list predates Chapter 13 and does not yet name it explicitly,
+ * but PES's write-back prohibition ("never owns, modifies, or writes back
+ * to... Atmospheric Memory") is unaffected — this field only reads the
+ * immutable snapshot; see MemoryEvaluator's class doc for the full
+ * reasoning and its nullable-input contract.
+ *
+ * Still deferred: Color Harmony (§12.17), Contrast (§12.18), Depth
  * (§12.19), and Exposure Evaluation (§12.25) — all require Exposure Model
  * output (Chapter 14, unbuilt). Lighting Direction Validation (§12.15) and
  * Localized Illumination (§12.16) — require camera-relative RenderCluster
- * data not available to Composition/Cluster at this pipeline stage. Memory
- * Evaluation (§12.24) — requires Atmospheric Memory (Chapter 13, unbuilt).
+ * data not available to Composition/Cluster at this pipeline stage.
  * Integration with Adaptive Performance (§12.27) — requires a live
  * APS/ALSC OptimizationPlan producer (Chapter 16 has no monitoring system
  * implemented) and, like §12.23, is outside §12.10's input list.
@@ -44,6 +52,7 @@ public record PerceptualReport(
         PatternRepetitionResult patternRepetition,
         CompositionEvaluationResult compositionEvaluation,
         MotionResult motion,
+        MemoryEvaluationResult memoryEvaluation,
         float overallBelievabilityScore,
         Set<PerceptualRecommendation> recommendations,
         long evaluationSequence
@@ -73,6 +82,9 @@ public record PerceptualReport(
         if (motion == null) {
             throw new IllegalArgumentException("motion must not be null");
         }
+        if (memoryEvaluation == null) {
+            throw new IllegalArgumentException("memoryEvaluation must not be null");
+        }
         if (!Float.isFinite(overallBelievabilityScore)
                 || overallBelievabilityScore < 0f || overallBelievabilityScore > 1f) {
             throw new IllegalArgumentException(
@@ -99,5 +111,10 @@ public record PerceptualReport(
     /** True when Hero anchor traversal within the trailing window exceeds §12.26's rapid-travel threshold. */
     public boolean isRapidTraversal() {
         return motion.rapidTraversal();
+    }
+
+    /** True when current composition density remains consistent with persisted Atmospheric Memory (§12.24). */
+    public boolean isMemoryConsistent() {
+        return memoryEvaluation.consistent();
     }
 }

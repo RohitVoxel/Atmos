@@ -14,6 +14,10 @@ package net.atmos.pes;
  * output (Chapter 14, unbuilt). Atmospheric Rhythm / visual fatigue
  * (§12.23) is excluded — see PerceptualReport's class doc.
  *
+ * Memory Evaluation (§12.24) contributes as memoryEvaluation.value(),
+ * identically weighted to every other category — see MemoryEvaluator's
+ * class doc for its nullable-input, neutral-fallback contract.
+ *
  * Pattern Repetition contributes as a non-repetitiveness score
  * (1 - repetitionRatio when sampled) rather than its raw boolean flag,
  * so a single flip does not zero out the entire average.
@@ -50,7 +54,8 @@ public final class OverallScoreEvaluator {
             TransitionResult transition,
             PatternRepetitionResult patternRepetition,
             CompositionEvaluationResult compositionEvaluation,
-            MotionResult motion) {
+            MotionResult motion,
+            MemoryEvaluationResult memoryEvaluation) {
 
         float nonRepetitionScore = nonRepetitionScore(patternRepetition, motion);
 
@@ -61,7 +66,8 @@ public final class OverallScoreEvaluator {
                         + temporalStability.value()      * PESWeights.OVERALL_WEIGHT_TEMPORAL_STABILITY
                         + transition.value()             * PESWeights.OVERALL_WEIGHT_TRANSITION
                         + nonRepetitionScore              * PESWeights.OVERALL_WEIGHT_PATTERN_NON_REPETITION
-                        + compositionEvaluation.value()  * PESWeights.OVERALL_WEIGHT_COMPOSITION;
+                        + compositionEvaluation.value()  * PESWeights.OVERALL_WEIGHT_COMPOSITION
+                        + memoryEvaluation.value()       * PESWeights.OVERALL_WEIGHT_MEMORY;
 
         return weightedSum / PESWeights.OVERALL_WEIGHT_TOTAL;
     }

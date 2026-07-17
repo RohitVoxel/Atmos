@@ -46,6 +46,9 @@ public final class PESWeights {
     public static final float OVERALL_WEIGHT_PATTERN_NON_REPETITION    = 1.0f;
     public static final float OVERALL_WEIGHT_COMPOSITION               = 1.0f;
 
+    // --- Stage 7: Memory Evaluation (§12.24) ---
+    public static final float OVERALL_WEIGHT_MEMORY = 1.0f;
+
     public static final float OVERALL_WEIGHT_TOTAL =
             OVERALL_WEIGHT_ENVIRONMENTAL_CONSISTENCY
                     + OVERALL_WEIGHT_BIOME_IDENTITY
@@ -53,7 +56,8 @@ public final class PESWeights {
                     + OVERALL_WEIGHT_TEMPORAL_STABILITY
                     + OVERALL_WEIGHT_TRANSITION
                     + OVERALL_WEIGHT_PATTERN_NON_REPETITION
-                    + OVERALL_WEIGHT_COMPOSITION;
+                    + OVERALL_WEIGHT_COMPOSITION
+                    + OVERALL_WEIGHT_MEMORY;
 
     // --- Stage 5: Motion Evaluation (§12.26) ---
     // No numeric anchor exists in §12.26 for either the window size or the
@@ -62,4 +66,10 @@ public final class PESWeights {
     // MotionEvaluator's class doc for why a real speed unit isn't derivable.
     public static final int   MOTION_WINDOW_SIZE = 8;
     public static final float MOTION_RAPID_TRAVERSAL_THRESHOLD = 24f;
+
+    // --- Stage 7: Memory Evaluation (§12.24) ---
+    // No numeric anchor exists in §12.24 for this tolerance — matches the
+    // sibling identity-evaluator tolerances above (implementation-defined,
+    // same status).
+    public static final float MEMORY_EVALUATION_TOLERANCE = 0.35f;
 }

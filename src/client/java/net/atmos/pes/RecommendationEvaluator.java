@@ -18,6 +18,16 @@ import java.util.Set;
  * meaningful repetition. PatternRepetitionResult is read exactly as
  * produced by PatternRepetitionEvaluator; MotionResult only gates
  * whether its flag is consulted here.
+ *
+ * --- Memory gating (§12.24 Stage 7) ---
+ *
+ * §12.32 names no distinct recommendation category for memory
+ * inconsistency. A composition that ignores persisted Atmospheric
+ * Memory is a coherence failure in the same sense as environmental or
+ * biome inconsistency, so memoryEvaluation joins those two signals under
+ * the existing INCREASE_ENVIRONMENTAL_COHERENCE recommendation rather
+ * than inventing a new PerceptualRecommendation constant not named by
+ * the Master Guide.
  */
 public final class RecommendationEvaluator {
 
@@ -31,11 +41,14 @@ public final class RecommendationEvaluator {
             TransitionResult transition,
             PatternRepetitionResult patternRepetition,
             CompositionEvaluationResult compositionEvaluation,
-            MotionResult motion) {
+            MotionResult motion,
+            MemoryEvaluationResult memoryEvaluation) {
 
         EnumSet<PerceptualRecommendation> recommendations = EnumSet.noneOf(PerceptualRecommendation.class);
 
-        if (!environmentalConsistency.consistent() || !biomeIdentity.consistent()) {
+        if (!environmentalConsistency.consistent()
+                || !biomeIdentity.consistent()
+                || !memoryEvaluation.consistent()) {
             recommendations.add(PerceptualRecommendation.INCREASE_ENVIRONMENTAL_COHERENCE);
         }
         if (!weatherIdentity.consistent()) {
