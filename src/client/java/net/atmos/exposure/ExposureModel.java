@@ -1,21 +1,37 @@
 package net.atmos.exposure;
 
+import net.atmos.atmosphere.fog.FogContext;
 import net.atmos.atmosphere.fog.FogDrifter;
 import net.atmos.atmosphere.fog.FogMath;
 
 /**
- * Exposure Model — Chapter 14 Stage 2 (Core Exposure Evaluation).
+ * Exposure Model — Chapter 14.
  *
- * Extends Stage 1's foundation exactly as that stage's own doc
- * anticipated: the plain currentExposureScale float is replaced by a
- * FogDrifter, chosen because §14.7 requires asymmetric bright/dark
- * adaptation and FogDrifter already provides asymmetric build/clear
- * response rates — no new smoothing primitive was invented.
+ * Stage 1 shipped only the persistent current-exposure field, deliberately
+ * pinned at EXPOSURE_BASELINE, with the extension point documented as
+ * "float -> FogDrifter." Stage 2 supplied the target-computation formula
+ * (TargetExposureEvaluator) as a standalone, unwired evaluator. This
+ * revision performs that wiring — EnvironmentalLuminanceEvaluator ->
+ * TargetExposureEvaluator -> FogDrifter — replacing the Stage 1 float
+ * field exactly at its documented replacement point, then adds Stage 3's
+ * SunReach input and movement-speed adaptation scaling on top.
  *
- * update() performs §14.20's Steps 1-5 (Ingest, Evaluate, Calculate,
- * Adapt, Publish) in one call, matching the self-contained lifecycle
- * pattern already established by PerceptualEvaluationSystem.evaluate().
- * publish() remains independently callable, preserving Stage 1's API.
+ * Movement-speed adaptation scaling (§14.9, §14.25): FogDrifter's
+ * buildSpeed/clearSpeed are fixed at construction and cannot be scaled
+ * per-call, and FogDrifter is a heavily-reused Chapter 3/5 primitive that
+ * must not be modified for this. Instead, movement scales the *effective
+ * deltaSec* passed to advance() — mathematically equivalent to scaling
+ * the drifter's response speed, achieved entirely at this call site
+ * without touching frozen code.
+ *
+ * Teleportation (§14.9 "Immediate Recalculation"): the target is already
+ * recomputed from scratch every update() call (no caching of
+ * lastTarget across ticks), so environmental jumps are reflected
+ * immediately — only the drifter's convergence toward that target remains
+ * gradual. reset() additionally snaps the drifter for genuine session/
+ * dimension teardown, mirroring FogManager's identical reset() pattern;
+ * wiring reset() to an AtmosClient dimension-change hook is a future
+ * integration task, not part of this stage (see Deferred Items).
  *
  * Simulation Thread only (§14.12) — not thread-safe, matching CellGrid's
  * identical Appendix D §11 disclaimer.
@@ -24,61 +40,58 @@ public final class ExposureModel {
 
     private final FogDrifter exposureDrifter = new FogDrifter(
             ExposureWeights.EXPOSURE_BASELINE,
-            ExposureWeights.DARK_ADAPTATION_SPEED,
-            ExposureWeights.BRIGHT_ADAPTATION_SPEED
-    );
+            ExposureWeights.EXPOSURE_DRIFTER_BUILD_SPEED,
+            ExposureWeights.EXPOSURE_DRIFTER_CLEAR_SPEED);
 
-    private boolean initialized = false;
+    private float currentExposureScale = ExposureWeights.EXPOSURE_BASELINE;
 
-    private EnvironmentalLuminanceResult lastLuminance =
-            new EnvironmentalLuminanceResult(1f, 1f, 1f, 1f);
-    private TargetExposureResult lastTarget =
-            new TargetExposureResult(ExposureWeights.EXPOSURE_BASELINE, 0f, 0f,
-                    ExposureWeights.EXPOSURE_BASELINE);
+    /** Null until the first update() — no fabricated snapshot is substituted. */
+    private RawExposureFactors lastFactors = null;
+    private EnvironmentalLuminanceResult lastLuminance = null;
+    private TargetExposureResult lastTarget = null;
 
-    /**
-     * Evaluates luminance, target exposure, and advances adaptation for
-     * the current simulation update, then publishes the result.
-     * First call snaps directly to target (Chapter 5-style startup-spike
-     * avoidance, matching EnvironmentalState.snapToTargets precedent).
-     */
     public void update(ExposureInputs inputs, float deltaSec) {
-        EnvironmentalLuminanceResult luminance = EnvironmentalLuminanceEvaluator.evaluate(
-                inputs.env(), inputs.cellGrid(), inputs.composition());
+        lastFactors   = ExposureFactorSampler.sample(inputs.env(), inputs.memory());
+        lastLuminance = EnvironmentalLuminanceEvaluator.evaluate(lastFactors, inputs.sunAngleRadians());
+        lastTarget    = TargetExposureEvaluator.evaluate(lastLuminance, inputs.memory());
 
-        TargetExposureResult target = TargetExposureEvaluator.evaluate(luminance, inputs.memory());
-
-        float safeDelta = FogMath.clamp(deltaSec, 0f, 0.1f);
-
-        if (!initialized) {
-            exposureDrifter.snap(target.value());
-            initialized = true;
-        } else {
-            exposureDrifter.advance(target.value(), safeDelta);
-        }
-
-        lastLuminance = luminance;
-        lastTarget = target;
+        float scaledDeltaSec = Math.max(0f, deltaSec) * adaptationSpeedScale();
+        currentExposureScale = exposureDrifter.advance(lastTarget.value(), scaledDeltaSec);
 
         publish();
     }
 
-    /** Publishes the current internal state as an immutable snapshot. */
     public void publish() {
-        ExposureStateManager.publish(exposureDrifter.get());
+        ExposureStateManager.publish(currentExposureScale);
     }
 
     public void reset() {
+        currentExposureScale = ExposureWeights.EXPOSURE_BASELINE;
         exposureDrifter.snap(ExposureWeights.EXPOSURE_BASELINE);
-        initialized = false;
-        lastLuminance = new EnvironmentalLuminanceResult(1f, 1f, 1f, 1f);
-        lastTarget = new TargetExposureResult(ExposureWeights.EXPOSURE_BASELINE, 0f, 0f,
-                ExposureWeights.EXPOSURE_BASELINE);
+        lastFactors   = null;
+        lastLuminance = null;
+        lastTarget    = null;
     }
 
-    public float currentExposureScale() { return exposureDrifter.get(); }
+    /**
+     * Movement-speed adaptation scaling — §14.9, §14.25. Reuses
+     * FogContext.getSmoothedSpeed(), the single authoritative smoothed
+     * player-speed estimate already shared by FogInterpolator, rather than
+     * sampling player velocity independently. Continuous walk->elytra
+     * ramp rather than discrete movement-mode states, matching Chapter 4
+     * §2's rejection of binary/stepped logic.
+     */
+    private float adaptationSpeedScale() {
+        float speed = FogContext.getSmoothedSpeed();
+        float t = FogMath.clamp(
+                (speed - ExposureWeights.ADAPTATION_SPEED_WALK_THRESHOLD)
+                        / (ExposureWeights.ADAPTATION_SPEED_FAST_THRESHOLD - ExposureWeights.ADAPTATION_SPEED_WALK_THRESHOLD),
+                0f, 1f);
+        return FogMath.lerp(ExposureWeights.ADAPTATION_SCALE_WALK, ExposureWeights.ADAPTATION_SCALE_ELYTRA, t);
+    }
 
+    public float currentExposureScale()             { return currentExposureScale; }
+    public RawExposureFactors lastFactors()          { return lastFactors; }
     public EnvironmentalLuminanceResult lastLuminance() { return lastLuminance; }
-
-    public TargetExposureResult lastTarget() { return lastTarget; }
+    public TargetExposureResult lastTarget()         { return lastTarget; }
 }

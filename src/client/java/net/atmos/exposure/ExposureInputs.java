@@ -27,11 +27,22 @@ import net.atmos.memory.AtmosphericMemorySnapshot;
  * established by {@code MemoryEvaluator} and
  * {@code DirectorPerformanceEvaluator}.
  *
- * SunReach is intentionally absent. No single SunReach aggregate exists
- * at this pipeline position — Chapter 8 produces per-cell/per-cluster
- * results, and RenderCluster (Appendix L) is where a finalized per-cluster
- * {@code sunReach} is eventually attached, downstream of the Exposure
- * Model. Identical omission already documented by {@code CompositionInputs}.
+ * SunReach is intentionally absent as a field. No single SunReach
+ * aggregate exists at this pipeline position — Chapter 8 produces
+ * per-cell/per-cluster results, and RenderCluster (Appendix L) is where a
+ * finalized per-cluster {@code sunReach} is eventually attached,
+ * downstream of the Exposure Model. Identical omission already documented
+ * by {@code CompositionInputs}.
+ *
+ * sunAngleRadians — Stage 3 addition. The current frame's solar angle,
+ * sourced by the caller from the same FogContext.sunAngle() value already
+ * sampled once per frame elsewhere in the pipeline (identical precedent to
+ * DirectorInputs' own sunAngleRadians field). Consumed only by
+ * EnvironmentalLuminanceEvaluator to derive the position-independent
+ * Solar Position component of SunReach's Directional Lighting term
+ * (Appendix W §1). Deliberately not a full SunReachCombinationResult or
+ * HorizonMap — see EnvironmentalLuminanceEvaluator's class doc for why
+ * per-cell terrain-aware SunReach remains out of scope for this stage.
  */
 public record ExposureInputs(
         EnvironmentalState env,
@@ -39,7 +50,8 @@ public record ExposureInputs(
         AtmosphericMemorySnapshot memory,
         Composition composition,
         DirectorState directorState,
-        OptimizationPlan optimizationPlan
+        OptimizationPlan optimizationPlan,
+        float sunAngleRadians
 ) {
     public ExposureInputs {
         if (env == null) throw new IllegalArgumentException("env must not be null");
@@ -47,5 +59,8 @@ public record ExposureInputs(
         if (composition == null) throw new IllegalArgumentException("composition must not be null");
         if (directorState == null) throw new IllegalArgumentException("directorState must not be null");
         // memory, optimizationPlan: nullable — see class doc.
+        // sunAngleRadians: no finiteness check, matching DirectorInputs'
+        // identical precedent — sanitization belongs to a future
+        // Chapter-14 failure-handling stage, not this record.
     }
 }

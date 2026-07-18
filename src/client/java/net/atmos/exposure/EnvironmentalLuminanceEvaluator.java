@@ -1,77 +1,52 @@
 package net.atmos.exposure;
 
-import net.atmos.atmosphere.EnvironmentalState;
 import net.atmos.atmosphere.fog.FogMath;
-import net.atmos.cellgrid.AtmosCell;
-import net.atmos.cellgrid.CellGrid;
-import net.atmos.composition.Composition;
-
-import java.util.Collection;
 
 /**
- * Environmental Luminance evaluator — Chapter 14 §14.6.
+ * Environmental Luminance Estimate (ELE) evaluator — Chapter 14 §14.6,
+ * Appendix W §1.
  *
- * Fuses global illumination (EnvironmentalState), local cell openness
- * (CellGrid), and visual salience (Composition) into one continuous
- * luminance estimate in [0,1]. Purely mathematical — no GPU/screen-space
- * reads, no world queries (CellGrid's skyExposed flag is already cached
- * per-cell, not sampled here).
+ * Combines two of Appendix W §1's three named inputs:
  *
- * Directional lighting (SunReach) is deliberately omitted: no per-frame
- * SunReach snapshot is threaded into ExposureInputs (see that record's
- * class doc — the identical omission already established for Stage 1).
- * Biome-specific response (§14.8) is likewise omitted — ExposureInputs
- * carries no BiomeTraits; only the weather-driven half of §14.8
- * (storm/humidity attenuation) is representable with current inputs.
+ *   Global Illumination State — RawExposureFactors.thermalEnergy(), reused
+ *     directly rather than resampling sun angle (EnvironmentalState already
+ *     derives thermalEnergy from cos(sunAngle) via a damped drifter).
  *
- * Stateless, deterministic, O(activeCells) — bounded by CellGrid's own
- * active-radius bound, never proportional to world size.
+ *   Directional Lighting — the Solar Position component of SunReach
+ *     (Chapter 8 Stage One): clamp(cos(sunAngleRadians), 0, 1). This is
+ *     the same formula net.atmos.sunreach.SunReachEvaluator uses for its
+ *     own Stage One term, computed independently here rather than by
+ *     calling that evaluator, because SunReachEvaluator.evaluate() also
+ *     requires a HorizonMap (Stage Two, Terrain Exposure) tied to a
+ *     specific Cell Grid coordinate — and ExposureInputs deliberately
+ *     excludes CellGrid cell lookups (see that record's class doc). This
+ *     expression already appears independently in EnvironmentalState,
+ *     HeroMomentEvaluator, and DaylightFogModifier for the identical
+ *     reason: none of them call into net.atmos.sunreach either.
+ *
+ * Local Cell State (Appendix W §1's third named input) remains
+ * unimplemented — identical precedent to ExposureFactorSampler's own
+ * documented CellGrid omission.
+ *
+ * Aggregation: weighted arithmetic sum (Appendix W §1.2 Candidate A),
+ * selected because Appendix W explicitly critiques the geometric-mean and
+ * product alternatives (Candidates B/C/D) for a "veto" failure mode that
+ * underestimates enclosed spaces — a defect this sum does not share.
+ * Flagged as implementation-defined per Appendix W §8's Decision Register.
  */
 public final class EnvironmentalLuminanceEvaluator {
 
     private EnvironmentalLuminanceEvaluator() {}
 
-    public static EnvironmentalLuminanceResult evaluate(EnvironmentalState env,
-                                                        CellGrid cellGrid,
-                                                        Composition composition) {
-        float globalIlluminance = globalIlluminance(env);
-        float localOpenness = localOpenness(cellGrid);
-        float visualSalienceDamping = visualSalienceDamping(composition);
+    public static EnvironmentalLuminanceResult evaluate(RawExposureFactors factors, float sunAngleRadians) {
+        float global      = factors.thermalEnergy();
+        float directional = FogMath.clamp((float) Math.cos(sunAngleRadians), 0f, 1f);
 
         float value = FogMath.clamp(
-                globalIlluminance * localOpenness * visualSalienceDamping, 0f, 1f);
+                global      * ExposureWeights.ELE_WEIGHT_GLOBAL
+                        + directional * ExposureWeights.ELE_WEIGHT_DIRECTIONAL,
+                0f, 1f);
 
-        return new EnvironmentalLuminanceResult(
-                globalIlluminance, localOpenness, visualSalienceDamping, value);
-    }
-
-    /** Day presence (1 - nightDepth) attenuated by haze and storm overcast. */
-    private static float globalIlluminance(EnvironmentalState env) {
-        float dayPresence = 1f - env.getNightDepth();
-        float hazeAttenuation = 1f - env.getSkyMoisture() * ExposureWeights.HAZE_DIMMING_STRENGTH;
-        float stormAttenuation = 1f - env.getStormEnergy() * ExposureWeights.STORM_DARKENING_STRENGTH;
-        return FogMath.clamp(dayPresence * hazeAttenuation * stormAttenuation, 0f, 1f);
-    }
-
-    /** Mean sky-exposure fraction across active cells, soft-floored. Neutral if no cells are loaded. */
-    private static float localOpenness(CellGrid cellGrid) {
-        Collection<AtmosCell> activeCells = cellGrid.getActiveCells();
-        if (activeCells.isEmpty()) {
-            return ExposureWeights.LOCAL_OPENNESS_NEUTRAL;
-        }
-
-        int exposedCount = 0;
-        for (AtmosCell cell : activeCells) {
-            if (cell.skyExposed()) exposedCount++;
-        }
-        float fraction = (float) exposedCount / activeCells.size();
-        return FogMath.lerp(ExposureWeights.LOCAL_OPENNESS_FLOOR, 1f, fraction);
-    }
-
-    /** §14.10 — a strong Hero Cluster subtly reduces the luminance estimate to preserve its definition. */
-    private static float visualSalienceDamping(Composition composition) {
-        if (composition.heroCluster() == null) return 1f;
-        float intensity = FogMath.clamp(composition.heroCluster().averageAtmosphericValue(), 0f, 1f);
-        return 1f - intensity * ExposureWeights.VISUAL_SALIENCE_DAMPING_MAX;
+        return new EnvironmentalLuminanceResult(global, directional, value);
     }
 }

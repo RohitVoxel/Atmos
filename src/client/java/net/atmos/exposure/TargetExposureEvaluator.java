@@ -4,21 +4,25 @@ import net.atmos.atmosphere.fog.FogMath;
 import net.atmos.memory.AtmosphericMemorySnapshot;
 
 /**
- * Target Exposure evaluator — Chapter 14 §14.7, §14.9.
+ * Target Exposure evaluator — Chapter 14 §14.8 (Target Exposure), §14.21/
+ * §14.27 (Memory Integration).
  *
- * Maps EnvironmentalLuminanceResult onto an exposure-scale target using
- * the two anchors given explicitly by Chapter 9 §13 (Bright Noon = 0.65,
- * Dusk = 1.70) — reused directly rather than inventing an unanchored
- * curve. Residual Atmospheric Memory (humidity/storm) biases the target
- * upward, reproducing §14.9's post-storm example: light stays diffused
- * (higher exposure scale) even once luminance alone says "clear."
+ * Chapter 14 gives no numeric formula anywhere — §14.8 states only that
+ * exposure "moves gradually toward the target." Linear interpolation
+ * between two anchors is therefore an implementation choice, not a
+ * verified alternative to a specified curve.
  *
- * memory is nullable — treated identically to MemoryEvaluator's own
- * established nullable-safe, neutral-fallback contract.
+ * EXPOSURE_SCALE_BRIGHT_ANCHOR / DARK_ANCHOR are NOT Chapter-14-anchored
+ * values (a prior revision incorrectly cited "Chapter 9 §13," which does
+ * not exist for this content). They are implementation-defined defaults
+ * loosely inspired by an unrelated illustrative example in the OLD
+ * guide's Chapter 4 (Confidence System) showing how Exposure Scale
+ * multiplies into rendered alpha — a different system, not a Target
+ * Exposure formula. Status: implementation-defined, pending Rohit's
+ * explicit tuning approval — same category as ConfidenceWeights' 0.5/0.5
+ * split.
  *
- * Stateless, deterministic, O(1). No upper clamp is applied to the
- * result: RenderCluster.exposureScale() itself specifies no upper bound
- * (see that record's own doc), so none is invented here.
+ * memory is nullable — same neutral-fallback contract as MemoryEvaluator.
  */
 public final class TargetExposureEvaluator {
 
