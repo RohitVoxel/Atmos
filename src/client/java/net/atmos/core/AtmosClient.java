@@ -1,6 +1,5 @@
 package net.atmos.core;
 
-import net.atmos.developer.DvfManager;
 import net.atmos.atmosphere.fog.FogContext;
 import net.atmos.atmosphere.fog.FogManager;
 import net.atmos.atmosphere.sky.MoonlightController;
@@ -75,7 +74,6 @@ public class AtmosClient implements ClientModInitializer {
 	public void onInitializeClient() {
 		AtmosConfig.load();
 		ShaderDetector.init();
-		DvfManager.init();
 
 		WorldRenderEvents.START.register(context -> {
 			Minecraft mc = Minecraft.getInstance();
