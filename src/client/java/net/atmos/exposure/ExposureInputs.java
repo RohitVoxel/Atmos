@@ -34,15 +34,18 @@ import net.atmos.memory.AtmosphericMemorySnapshot;
  * downstream of the Exposure Model. Identical omission already documented
  * by {@code CompositionInputs}.
  *
- * sunAngleRadians — Stage 3 addition. The current frame's solar angle,
- * sourced by the caller from the same FogContext.sunAngle() value already
- * sampled once per frame elsewhere in the pipeline (identical precedent to
+ * sunAngleRadians — the current frame's solar angle, sourced by the
+ * caller from the same FogContext.sunAngle() value already sampled once
+ * per frame elsewhere in the pipeline (identical precedent to
  * DirectorInputs' own sunAngleRadians field). Consumed only by
- * EnvironmentalLuminanceEvaluator to derive the position-independent
- * Solar Position component of SunReach's Directional Lighting term
- * (Appendix W §1). Deliberately not a full SunReachCombinationResult or
- * HorizonMap — see EnvironmentalLuminanceEvaluator's class doc for why
- * per-cell terrain-aware SunReach remains out of scope for this stage.
+ * {@link EnvironmentalLightingFactorEvaluator} to derive the
+ * position-independent Solar Position component of SunReach's
+ * Directional Lighting term (Appendix W §1) as a standalone, unaggregated
+ * factor — see {@link EnvironmentalLightingFactors} for why it is not
+ * combined into a single luminance value here. Deliberately not a full
+ * SunReachCombinationResult or HorizonMap — see
+ * EnvironmentalLightingFactorEvaluator's class doc for why per-cell
+ * terrain-aware SunReach remains out of scope for this stage.
  */
 public record ExposureInputs(
         EnvironmentalState env,
