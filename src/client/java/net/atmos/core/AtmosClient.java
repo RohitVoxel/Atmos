@@ -1,5 +1,7 @@
 package net.atmos.core;
 
+import net.atmos.aps.TelemetryCollector;
+import net.atmos.aps.TelemetryManager;
 import net.atmos.atmosphere.fog.FogContext;
 import net.atmos.atmosphere.fog.FogManager;
 import net.atmos.atmosphere.sky.MoonlightController;
@@ -53,6 +55,13 @@ public class AtmosClient implements ClientModInitializer {
 	// DirectorPerformanceEvaluator's null-safe failsafe precedent.
 	private static final CellMemoryIntegrator CELL_MEMORY_INTEGRATOR = new CellMemoryIntegrator();
 
+	// Chapter 16 Stage 2 (Appendix D §2) — Render Thread telemetry collector.
+	// Owns only per-frame timing measurement and TelemetrySnapshot assembly;
+	// no optimization logic exists downstream of it yet. See
+	// TelemetryCollector's class doc for the exact meaning (and current
+	// limitations) of each measured field.
+	private static final TelemetryCollector TELEMETRY_COLLECTOR = new TelemetryCollector();
+
 	// skyContext is written once per frame at WorldRenderEvents.START and read
 	// by SkyMixin. Nulled on disconnect and dimension change so SkyMixin's
 	// null check catches the gap before the next valid frame.
@@ -78,6 +87,10 @@ public class AtmosClient implements ClientModInitializer {
 		WorldRenderEvents.START.register(context -> {
 			Minecraft mc = Minecraft.getInstance();
 			if (mc.level == null || mc.cameraEntity == null) return;
+
+			// Chapter 16 Stage 2 — brackets the entire Atmos per-frame update
+			// block below. Must be the first statement in this handler.
+			TELEMETRY_COLLECTOR.beginFrame();
 
 			// Publish the per-frame CameraSnapshot first — every other system
 			// that reads camera state this frame (currently none; future:
@@ -121,6 +134,7 @@ public class AtmosClient implements ClientModInitializer {
 				SKY_COLOR_CONTROLLER.reset();
 				CELL_GRID.reset();
 				CELL_MEMORY_INTEGRATOR.reset();
+				TELEMETRY_COLLECTOR.reset();
 				skyContext   = null;
 				skyLastNanos = -1L;
 				skyDeltaSec  = 0f;
@@ -170,6 +184,10 @@ public class AtmosClient implements ClientModInitializer {
 			// so this uses the current frame's delta rather than the
 			// previous frame's stale value.
 			CELL_MEMORY_INTEGRATOR.update(CELL_GRID, FOG_MANAGER.getEnvState(), skyDeltaSec);
+
+			// Chapter 16 Stage 2 — must be the last statement in this
+			// handler; publishes this frame's TelemetrySnapshot.
+			TELEMETRY_COLLECTOR.endFrame(CELL_GRID.getActiveCells().size());
 		});
 
 		// Reset all atmospheric state on disconnect.
@@ -191,6 +209,8 @@ public class AtmosClient implements ClientModInitializer {
 			CameraManager.reset();
 			CELL_GRID.shutdown();
 			CELL_MEMORY_INTEGRATOR.reset();
+			TELEMETRY_COLLECTOR.reset();
+			TelemetryManager.reset();
 			skyContext        = null;
 			skyLastNanos      = -1L;
 			skyDeltaSec       = 0f;
