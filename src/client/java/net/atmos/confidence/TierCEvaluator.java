@@ -2,6 +2,7 @@ package net.atmos.confidence;
 
 import net.atmos.atmosphere.fog.FogMath;
 import net.atmos.core.CameraSnapshot;
+import net.minecraft.client.renderer.culling.Frustum;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
@@ -112,7 +113,8 @@ public final class TierCEvaluator {
                 targetWorldPos.y + FRUSTUM_PROBE_HALF_EXTENT,
                 targetWorldPos.z + FRUSTUM_PROBE_HALF_EXTENT
         );
-        boolean inFrustum = camera.frustum().isVisible(probe);
+        Frustum frustum = camera.frustum();
+        boolean inFrustum = (frustum != null) && frustum.isVisible(probe);
         float frustumFactor = inFrustum ? 1.0f : ConfidenceWeights.TIER_C_FRUSTUM_FLOOR;
 
         // Allocation-free three-factor overload (Confidence System Final
