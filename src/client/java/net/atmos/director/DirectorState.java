@@ -13,6 +13,13 @@ package net.atmos.director;
  *                          multipliers, always genuine.
  * failureState          — Stage 9 (Appendix U) — weather-stability timer/flag
  *                          and travel scale, always genuine.
+ * fogDensity            — Appendix ZC §2 — Director-owned environmental
+ *                          visibility signal, [0,1], consumed downstream as
+ *                          Appendix ZB Blocker 4's EnvironmentalVisibility.
+ *                          Continues updating during weather instability,
+ *                          matching Visual Fatigue / Global Intensity /
+ *                          Emotional Rhythm / Director Memory's own
+ *                          documented behaviour (see AtmosphereDirector).
  */
 public record DirectorState(
         DirectorPhase phase,
@@ -25,7 +32,8 @@ public record DirectorState(
         float emotionalRhythm,
         float heroMemory,
         DirectorPerformanceState performanceState,
-        DirectorFailureState failureState
+        DirectorFailureState failureState,
+        float fogDensity
 ) {
     public DirectorState {
         if (phase == null) throw new IllegalArgumentException("phase must not be null");
@@ -47,5 +55,8 @@ public record DirectorState(
         }
         if (performanceState == null) throw new IllegalArgumentException("performanceState must not be null");
         if (failureState == null) throw new IllegalArgumentException("failureState must not be null");
+        if (!Float.isFinite(fogDensity) || fogDensity < 0f || fogDensity > 1f) {
+            throw new IllegalArgumentException("fogDensity must be within [0,1], got " + fogDensity);
+        }
     }
 }

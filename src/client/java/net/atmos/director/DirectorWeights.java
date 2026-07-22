@@ -78,6 +78,15 @@ public final class DirectorWeights {
     /** Appendix U §U.12 — evaluation-window scale under normal travel speed. */
     public static final float NORMAL_TRAVEL_SCALE = 1.00f;
 
+    /**
+     * Appendix ZC §2 — implementation-defined fogDensity weights. Simple
+     * weighted sum, clamped to [0,1] by FogDensityEvaluator; weights are
+     * not required to sum to 1.0 (this is not a ConfidenceMath weighted
+     * geometric product).
+     */
+    public static final float FOG_DENSITY_HUMIDITY_WEIGHT = 0.65f;
+    public static final float FOG_DENSITY_STORM_WEIGHT    = 0.55f;
+
     /** Appendix R §R.5 phase-to-target mapping. Exhaustive over {@link DirectorPhase}. */
     public static float emotionalRhythmTarget(DirectorPhase phase) {
         return switch (phase) {

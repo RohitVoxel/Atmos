@@ -18,7 +18,15 @@ import net.minecraft.world.phys.Vec3;
  * input, stabilize weather, scale travel, then run the unchanged normal
  * update.
  *
- * Stages 1–8 remain unchanged and frozen.
+ * Stages 1–9 remain unchanged and frozen.
+ *
+ * Appendix ZC §2 adds fogDensity: a Director-owned, independently
+ * evaluated continuous signal (FogDensityEvaluator), computed and
+ * published every update regardless of weather-stability gating — the
+ * same "continues normally" treatment §U.9 already documents for Visual
+ * Fatigue, Global Intensity, Emotional Rhythm, and Director Memory. It
+ * is not phase-lock gated because it is not a decision, it is a
+ * continuous physical signal.
  *
  * U.6 comparison note: weatherChanged uses Float.compare(a, b) != 0
  * rather than a plain != comparison, per Appendix U §U.6's literal
@@ -224,10 +232,15 @@ public final class AtmosphereDirector {
         DirectorFailureState failureState =
                 new DirectorFailureState(weatherStableTime, weatherStable, travelScale);
 
+        // --- Appendix ZC §2: Director-owned fogDensity ---
+        // Computed unconditionally, independent of weatherStable — see
+        // class doc for why this is not phase-lock gated.
+        float fogDensity = FogDensityEvaluator.evaluate(inputs.env());
+
         return new DirectorState(
                 currentPhase, previousPhase, transitionReason, timeInPhaseSeconds,
                 heroMoment, visualFatigue, globalIntensity, emotionalRhythm, heroMemory,
-                performanceState, failureState);
+                performanceState, failureState, fogDensity);
     }
 
     /** §U.15 — returns {@code value} if finite, else {@code previousValid}. */
