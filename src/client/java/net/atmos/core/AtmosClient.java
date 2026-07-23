@@ -61,7 +61,7 @@ public class AtmosClient implements ClientModInitializer {
 	private static final MoonlightController       MOONLIGHT_CONTROLLER  = new MoonlightController();
 
 	// Cell Grid (Chapter 6 / Appendix F §3). Owns spatial cell lifecycle and
-	// Horizon Map generation only.
+	// Horizon Map / Canopy Profile generation only.
 	//
 	// Lifecycle split (audit Finding F fix): dimension change calls
 	// CELL_GRID.reset() (flush only). DISCONNECT calls CELL_GRID.shutdown()
@@ -198,9 +198,8 @@ public class AtmosClient implements ClientModInitializer {
 				level.getRainLevel(1.0f), level.getThunderLevel(1.0f), playerPosition
 		), deltaSec);
 
-		// Executed per mandated pipeline order; not yet consumed downstream —
-		// every Blocker producer that would read it (Color/Definition
-		// Producers, LOD Assignment) is unimplemented.
+		// Consumed downstream by RenderCluster Construction's Color,
+		// Definition, and Distance producers (Appendix ZB Blockers 2-4).
 		LightingSnapshot lighting = AtmosphericLightingPipeline.evaluate(
 				cameraSnapshot, env, directorState, sunAngleRadians);
 
@@ -212,7 +211,20 @@ public class AtmosClient implements ClientModInitializer {
 
 		PerformanceSnapshot performanceSnapshot = PerformanceSnapshotBridge.current();
 
-		List<RenderCluster> renderClusters = buildRenderClusters(composition, exposureScale);
+		// Appendix ZB §I — continuous simulation time in seconds, derived
+		// from world time ticks plus the current partial tick.
+		float gameTimeSeconds = (level.getGameTime() + cameraSnapshot.partialTick()) / 20.0f;
+
+		// Chapter 8 Stage Five input — smoothed values already sampled once
+		// per frame into skyContext (FogContext.rain()/thunder()), per
+		// WeatherAttenuationEvaluator's documented contract.
+		float rainLevel = skyContext.rain();
+		float thunderLevel = skyContext.thunder();
+
+		List<RenderCluster> renderClusters = buildRenderClusters(
+				composition, cameraSnapshot, lighting, env, directorState, performanceSnapshot,
+				sunAngleRadians, exposureScale, skyContext.renderDistance(), gameTimeSeconds,
+				rainLevel, thunderLevel);
 
 		List<ClusterGeometry> geometries = new ArrayList<>(renderClusters.size());
 		for (RenderCluster cluster : renderClusters) {
@@ -224,43 +236,50 @@ public class AtmosClient implements ClientModInitializer {
 	}
 
 	/**
-	 * Attempts RenderCluster Construction for every classified cluster.
-	 * Direction/Width/Length/Color/Definition/FadeDistance/AnimationPhase/
-	 * LODLevel/combined-SunReach have no producer yet — every attempt
-	 * currently resolves to Optional.empty() for those fields (Appendix P §11).
+	 * Attempts RenderCluster Construction for every classified cluster via
+	 * {@link RenderClusterConstructionStage#construct}, which orchestrates
+	 * every approved Appendix ZB Blocker producer, per-cluster Confidence,
+	 * and the full SunReach pipeline for that cluster.
 	 */
-	private static List<RenderCluster> buildRenderClusters(Composition composition, float exposureScale) {
+	private static List<RenderCluster> buildRenderClusters(
+			Composition composition,
+			CameraSnapshot camera,
+			LightingSnapshot lighting,
+			EnvironmentalState env,
+			DirectorState directorState,
+			PerformanceSnapshot performanceSnapshot,
+			float sunAngleRadians,
+			float exposureScale,
+			int renderDistanceChunks,
+			float gameTimeSeconds,
+			float rainLevel,
+			float thunderLevel
+	) {
 		List<Optional<RenderCluster>> attempts = new ArrayList<>();
 
 		if (composition.heroCluster() != null) {
-			attempts.add(attemptRenderCluster(composition.heroCluster(), RenderCluster.Role.HERO, exposureScale));
+			attempts.add(RenderClusterConstructionStage.construct(
+					composition.heroCluster(), RenderCluster.Role.HERO,
+					camera, lighting, env, directorState, performanceSnapshot, CELL_GRID,
+					sunAngleRadians, exposureScale, renderDistanceChunks, gameTimeSeconds,
+					rainLevel, thunderLevel));
 		}
 		for (Cluster c : composition.secondaryClusters()) {
-			attempts.add(attemptRenderCluster(c, RenderCluster.Role.SECONDARY, exposureScale));
+			attempts.add(RenderClusterConstructionStage.construct(
+					c, RenderCluster.Role.SECONDARY,
+					camera, lighting, env, directorState, performanceSnapshot, CELL_GRID,
+					sunAngleRadians, exposureScale, renderDistanceChunks, gameTimeSeconds,
+					rainLevel, thunderLevel));
 		}
 		for (Cluster c : composition.ambientClusters()) {
-			attempts.add(attemptRenderCluster(c, RenderCluster.Role.AMBIENT, exposureScale));
+			attempts.add(RenderClusterConstructionStage.construct(
+					c, RenderCluster.Role.AMBIENT,
+					camera, lighting, env, directorState, performanceSnapshot, CELL_GRID,
+					sunAngleRadians, exposureScale, renderDistanceChunks, gameTimeSeconds,
+					rainLevel, thunderLevel));
 		}
 
 		return RenderClusterConstructionStage.publishAll(attempts);
-	}
-
-	private static Optional<RenderCluster> attemptRenderCluster(Cluster cluster, RenderCluster.Role role, float exposureScale) {
-		return RenderClusterConstructionStage.attemptConstruct(
-				cluster.centerWorldPos(),
-				Optional.empty(),  // Direction — Global Solar Direction Provider not implemented
-				Optional.empty(),  // Width — Cluster Builder mapping not implemented (Appendix ZB Blocker 8)
-				Optional.empty(),  // Length — Cluster Builder mapping not implemented (Appendix ZB Blocker 8)
-				Optional.empty(),  // Alpha — needs SunReach/FadeWeight/LODWeight, all unavailable
-				Optional.empty(),  // Color — Lighting Pipeline Color Producer not implemented
-				Optional.empty(),  // Definition — Lighting Pipeline Definition Producer not implemented
-				exposureScale,
-				Optional.empty(),  // Fade Distance — Distance Evaluation Stage not implemented
-				role,
-				Optional.empty(),  // Animation Phase — Animation System not implemented
-				Optional.empty(),  // LOD Level — Adaptive Performance LOD Assignment not implemented
-				Optional.empty()   // SunReach — CanopyProfileGenerator is package-private to net.atmos.cellgrid
-		);
 	}
 
 	public static FogManager               getFogManager()               { return FOG_MANAGER;               }

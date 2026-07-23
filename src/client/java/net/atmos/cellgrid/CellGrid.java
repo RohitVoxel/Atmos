@@ -21,10 +21,12 @@ import java.util.Set;
  * Cell Grid — spatial sampling and lifecycle manager for Atmospheric Cells.
  *
  * Implements Chapter 6 (Atmospheric Cell Grid) and the Cell Grid's portion of
- * Appendix F §3 (Horizon Map ownership). Per Appendix D §11 (Unified
- * Threading Model), this class is owned exclusively by the Main/Simulation
- * thread — it performs no rendering, no GPU work, and must never be accessed
- * from the Render Thread concurrently with update().
+ * Appendix F §3 (Horizon Map ownership) and Appendix ZD §5 (Canopy Profile
+ * ownership — generated and regenerated alongside Horizon Map, using the
+ * same package-private CanopyProfileGenerator, per the same lifecycle).
+ * Per Appendix D §11 (Unified Threading Model), this class is owned exclusively
+ * by the Main/Simulation thread — it performs no rendering, no GPU work, and
+ * must never be accessed from the Render Thread concurrently with update().
  *
  * Two-tier storage, per Chapter 6 §12/§16/§33:
  *   - active:  cells within the current streaming radius of the camera.
@@ -39,9 +41,10 @@ import java.util.Set;
  *              MAX_CACHED_CELLS with automatic eviction of the oldest entry
  *              once the cap is exceeded (Appendix B §7).
  *
- * Horizon Map generation cost is bounded because it only runs once per cell
- * on first creation, or once per cell when explicitly marked dirty and next
- * touched — never on a fixed timer, never for cells outside the active radius.
+ * Horizon Map (and Canopy Profile) generation cost is bounded because each
+ * only runs once per cell on first creation, or once per cell when explicitly
+ * marked dirty and next touched — never on a fixed timer, never for cells
+ * outside the active radius.
  *
  * Because active/cached both store AtmosCell references (not copies),
  * per-cell Historical Memory (Chapter 13 §13.9, AtmosCell.advanceMemory)
@@ -279,7 +282,7 @@ public final class CellGrid {
 
     /**
      * Clears all cell state. Called from the same lifecycle points as every
-     * other Atmos controller's reset() — disconnect and dimension change —
+     * other Atmos controller's reset() (disconnect and dimension change)
      * so stale terrain/biome data from a previous world/dimension cannot
      * leak into the next one.
      *
@@ -403,10 +406,11 @@ public final class CellGrid {
         Holder<Biome> biome  = level.getBiome(centerPos);
         boolean skyExposed   = level.canSeeSky(centerPos);
         HorizonMap horizonMap = HorizonMapGenerator.generate(coord, CELL_SIZE, level);
+        CanopyProfile canopyProfile = CanopyProfileGenerator.generate(coord, CELL_SIZE, level);
 
         long seed = computeDeterministicSeed(level, coord, biome);
 
-        AtmosCell cell = new AtmosCell(coord, seed, biome, skyExposed, horizonMap, tickCounter);
+        AtmosCell cell = new AtmosCell(coord, seed, biome, skyExposed, horizonMap, canopyProfile, tickCounter);
 
         if (currentDimensionKey != null) {
             memoryPersistence.reclaimPending(currentDimensionKey, coord).ifPresentOrElse(
@@ -426,8 +430,9 @@ public final class CellGrid {
         Holder<Biome> biome  = level.getBiome(centerPos);
         boolean skyExposed   = level.canSeeSky(centerPos);
         HorizonMap horizonMap = HorizonMapGenerator.generate(coord, CELL_SIZE, level);
+        CanopyProfile canopyProfile = CanopyProfileGenerator.generate(coord, CELL_SIZE, level);
 
-        cell.applyRegeneration(biome, skyExposed, horizonMap);
+        cell.applyRegeneration(biome, skyExposed, horizonMap, canopyProfile);
     }
 
     private BlockPos centerPos(CellCoord coord) {

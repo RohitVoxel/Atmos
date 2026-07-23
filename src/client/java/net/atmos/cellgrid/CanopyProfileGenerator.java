@@ -47,8 +47,8 @@ import net.minecraft.world.level.block.state.BlockState;
  * CanopyOcclusionEvaluator's class doc for why this is architecturally
  * safe without requiring this generator to become terrain-aware.
  *
- * Pure, stateless generator. Not currently invoked anywhere — inert until
- * a future integration task wires it into AtmosCell/CellGrid.java.
+ * Pure, stateless generator. Invoked by {@link CellGrid} on cell creation
+ * and regeneration (Appendix ZD §5), storing the result on {@link AtmosCell}.
  */
 final class CanopyProfileGenerator {
 

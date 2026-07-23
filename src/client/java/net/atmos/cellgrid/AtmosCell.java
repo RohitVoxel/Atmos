@@ -16,6 +16,9 @@ import net.minecraft.world.level.biome.Biome;
  *     - biome identity
  *     - sky exposure (structural canSeeSky sample at cell center)
  *     - Horizon Map (immutable terrain-visibility profile)
+ *     - Canopy Profile (immutable per-slab foliage presence profile,
+ *       Chapter 8 §13 Stage Four input — generated and regenerated
+ *       identically to Horizon Map; Appendix ZD §5)
  *     - deterministic seed
  *
  *   Owned by the Atmospheric Memory System (Chapter 13), stored here per
@@ -36,19 +39,22 @@ import net.minecraft.world.level.biome.Biome;
  *
  *   Explicitly NOT owned here — deferred to future systems per the approved
  *   task boundary, and intentionally absent rather than stubbed:
- *     - SunReach evaluation / values          (Chapter 8 evaluators exist,
- *                                               not yet wired per-cell)
- *     - Confidence values                     (Chapter 4, evaluated ad hoc)
- *     - Illumination values                   (Chapter 6 §24, not yet built)
- *     - Cluster / composition data             (Chapter 7 / 10, cluster-level)
+ *     - SunReach evaluation / values           (Chapter 8 evaluators consume
+ *                                                horizonMap()/canopyProfile()
+ *                                                directly; no cached SunReach
+ *                                                value is stored per-cell)
+ *     - Confidence values                      (Chapter 4, evaluated ad hoc)
+ *     - Illumination values                    (Chapter 6 §24, not yet built)
+ *     - Cluster / composition data              (Chapter 7 / 10, cluster-level)
  *
- * Threading: mutable by necessity (Horizon Map is replaced on regeneration;
- * LRU touch timestamp updates on every access; Historical Memory advances
- * every frame and may be corrected once by an async disk load), but all
- * mutation is restricted to callers documented on each method. Per
- * Appendix D §11 (Unified Threading Model), Cell Grid is owned exclusively
- * by the Main/Simulation thread — this class is not thread-safe and must
- * not be accessed from the Render Thread or any background thread.
+ * Threading: mutable by necessity (Horizon Map and Canopy Profile are
+ * replaced on regeneration; LRU touch timestamp updates on every access;
+ * Historical Memory advances every frame and may be corrected once by an
+ * async disk load), but all mutation is restricted to callers documented
+ * on each method. Per Appendix D §11 (Unified Threading Model), Cell Grid
+ * is owned exclusively by the Main/Simulation thread — this class is not
+ * thread-safe and must not be accessed from the Render Thread or any
+ * background thread.
  */
 public final class AtmosCell {
 
@@ -58,6 +64,7 @@ public final class AtmosCell {
     private Holder<Biome> biome;
     private boolean skyExposed;
     private HorizonMap horizonMap;
+    private CanopyProfile canopyProfile;
 
     // Set externally via CellGrid.markDirty(), cleared once regeneration
     // completes. No automatic trigger is wired to block-update events in
@@ -87,12 +94,14 @@ public final class AtmosCell {
     private long  lastMemoryUpdateTick = -1L;
 
     AtmosCell(CellCoord coord, long deterministicSeed, Holder<Biome> biome,
-              boolean skyExposed, HorizonMap horizonMap, long creationTick) {
+              boolean skyExposed, HorizonMap horizonMap, CanopyProfile canopyProfile,
+              long creationTick) {
         this.coord             = coord;
         this.deterministicSeed = deterministicSeed;
         this.biome             = biome;
         this.skyExposed        = skyExposed;
         this.horizonMap        = horizonMap;
+        this.canopyProfile     = canopyProfile;
         this.lastTouchedTick   = creationTick;
     }
 
@@ -103,6 +112,9 @@ public final class AtmosCell {
 
     /** Read-only Horizon Map — see Appendix F §3's read-only access contract. */
     public HorizonMap horizonMap()  { return horizonMap; }
+
+    /** Read-only Canopy Profile — Chapter 8 §13 Stage Four input (CanopyOcclusionEvaluator). */
+    public CanopyProfile canopyProfile() { return canopyProfile; }
 
     public boolean isDirty()        { return dirty; }
     public long lastTouchedTick()   { return lastTouchedTick; }
@@ -166,10 +178,12 @@ public final class AtmosCell {
     }
 
     /** Applies freshly regenerated procedural data, then clears the dirty flag. */
-    void applyRegeneration(Holder<Biome> biome, boolean skyExposed, HorizonMap horizonMap) {
-        this.biome      = biome;
-        this.skyExposed = skyExposed;
-        this.horizonMap = horizonMap;
-        this.dirty      = false;
+    void applyRegeneration(Holder<Biome> biome, boolean skyExposed,
+                           HorizonMap horizonMap, CanopyProfile canopyProfile) {
+        this.biome         = biome;
+        this.skyExposed    = skyExposed;
+        this.horizonMap    = horizonMap;
+        this.canopyProfile = canopyProfile;
+        this.dirty         = false;
     }
 }
