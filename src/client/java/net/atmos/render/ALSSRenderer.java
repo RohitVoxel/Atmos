@@ -325,7 +325,9 @@ public final class ALSSRenderer {
 
         consumer.addVertex(x, y, z)
                 .setColor(r, g, b, a)
-                .setUv(u, v);
+                .setUv(u, v)
+                .setUv2(0xF000F0, 0xF000F0) // Default full light / max brightness
+                .setNormal(0.0f, 1.0f, 0.0f); // Default up-vector normal
     }
 
     private static int colorChannel(float value) {
