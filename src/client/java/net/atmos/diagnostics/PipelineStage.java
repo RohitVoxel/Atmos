@@ -1,0 +1,15 @@
+package net.atmos.diagnostics;
+
+public enum PipelineStage {
+    ENVIRONMENTAL_STATE,
+    CONFIDENCE,
+    CELL_GRID,
+    CLUSTER_BUILDER,
+    SUN_REACH,
+    COMPOSITION,
+    DIRECTOR,
+    EXPOSURE,
+    RENDER_CLUSTER_CONSTRUCTION,
+    GEOMETRY_GENERATION,
+    ALSS_RENDERER
+}

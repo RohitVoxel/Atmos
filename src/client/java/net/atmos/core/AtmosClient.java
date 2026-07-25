@@ -20,6 +20,7 @@ import net.atmos.composition.Composition;
 import net.atmos.composition.CompositionEngine;
 import net.atmos.composition.CompositionInputs;
 import net.atmos.config.AtmosConfig;
+import net.atmos.diagnostics.*;
 import net.atmos.director.AtmosphereDirector;
 import net.atmos.director.DirectorInputs;
 import net.atmos.director.DirectorState;
@@ -30,24 +31,26 @@ import net.atmos.exposure.ExposureStateSnapshot;
 import net.atmos.lighting.AtmosphericLightingPipeline;
 import net.atmos.lighting.LightingSnapshot;
 import net.atmos.memory.CellMemoryIntegrator;
-import net.atmos.render.ALSSRenderer;
-import net.atmos.render.ClusterGeometry;
-import net.atmos.render.GeometryGenerator;
 import net.atmos.render.RenderCluster;
 import net.atmos.render.RenderClusterConstructionStage;
-import net.atmos.render.RendererExpansion;
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
+import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.core.Holder;
+import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.phys.Vec3;
+import com.mojang.blaze3d.platform.InputConstants;
+import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -55,65 +58,64 @@ import java.util.Optional;
 
 public class AtmosClient implements ClientModInitializer {
 
-	private static final FogManager               FOG_MANAGER           = new FogManager();
-	private static final SkyColorController        SKY_COLOR_CONTROLLER  = new SkyColorController();
-	private static final SunGlareController        SUN_GLARE_CONTROLLER  = new SunGlareController();
-	private static final MoonlightController       MOONLIGHT_CONTROLLER  = new MoonlightController();
+	private static final FogManager FOG_MANAGER = new FogManager();
+	private static final SkyColorController SKY_COLOR_CONTROLLER = new SkyColorController();
+	private static final SunGlareController SUN_GLARE_CONTROLLER = new SunGlareController();
+	private static final MoonlightController MOONLIGHT_CONTROLLER = new MoonlightController();
 
-	// Cell Grid (Chapter 6 / Appendix F §3). Owns spatial cell lifecycle and
-	// Horizon Map / Canopy Profile generation only.
-	//
-	// Lifecycle split (audit Finding F fix): dimension change calls
-	// CELL_GRID.reset() (flush only). DISCONNECT calls CELL_GRID.shutdown()
-	// (flush, then bounded drain-and-stop of the persistence layer's
-	// background thread) — see both handlers below.
 	private static final CellGrid CELL_GRID = new CellGrid();
-
-	// Chapter 13 Stage 2/4 — per-cell Historical Memory advancement.
 	private static final CellMemoryIntegrator CELL_MEMORY_INTEGRATOR = new CellMemoryIntegrator();
-
-	// Chapter 16 Stage 2 (Appendix D §2) — Render Thread telemetry collector.
 	private static final TelemetryCollector TELEMETRY_COLLECTOR = new TelemetryCollector();
 
-	// Chapter 9 Stage 5 (Appendix Y §Runtime Ownership: "AtmosClient owns...
-	// Frame coordination"; Stage 5 requirement 2: "Make AtmosClient the sole
-	// runtime integration owner"). Owned directly here, matching the
-	// FOG_MANAGER/CELL_GRID precedent — no separate coordinator class exists.
-	private static final AtmosphereDirector DIRECTOR       = new AtmosphereDirector();
-	private static final ExposureModel      EXPOSURE_MODEL = new ExposureModel();
+	private static final AtmosphereDirector DIRECTOR = new AtmosphereDirector();
+	private static final ExposureModel EXPOSURE_MODEL = new ExposureModel();
 
-	// skyContext is written once per frame at WorldRenderEvents.START and read
-	// by SkyMixin. Nulled on disconnect and dimension change so SkyMixin's
-	// null check catches the gap before the next valid frame.
 	private static FogContext skyContext = null;
+	private static float skyDeltaSec = 0f;
+	private static long skyLastNanos = -1L;
 
-	// Delta time for sky color smoothing.
-	private static float skyDeltaSec  = 0f;
-	private static long  skyLastNanos = -1L;
-
-	// Dimension tracking for mid-session change detection.
 	private static ResourceKey<Level> currentDimension = null;
+
+	private static KeyMapping diagnosticToggleKey;
 
 	@Override
 	public void onInitializeClient() {
 		AtmosConfig.load();
 		ShaderDetector.init();
 
+		// Register F8 Keybinding to cycle diagnostic modes (OFF -> LIGHT -> NORMAL -> FULL -> OFF)
+		diagnosticToggleKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
+				"key.atmos.toggle_diagnostics",
+				InputConstants.Type.KEYSYM,
+				GLFW.GLFW_KEY_F8,
+				"category.atmos.keys"
+		));
+
+		// Handle Mode Toggling via F8 Key
+		ClientTickEvents.END_CLIENT_TICK.register(client -> {
+			while (diagnosticToggleKey.consumeClick()) {
+				DiagnosticMode[] modes = DiagnosticMode.values();
+				DiagnosticMode next = modes[(DiagnosticManager.MODE.ordinal() + 1) % modes.length];
+				DiagnosticManager.MODE = next;
+
+				if (client.player != null) {
+					client.player.displayClientMessage(
+							Component.literal("Atmos Diagnostic Mode: " + next.name()), true
+					);
+				}
+			}
+		});
+
 		WorldRenderEvents.START.register(context -> {
 			Minecraft mc = Minecraft.getInstance();
 			if (mc.level == null || mc.cameraEntity == null) return;
 
 			TELEMETRY_COLLECTOR.beginFrame();
-
-			// Appendix F §1 — single Render Thread writer call site.
-			// NOTE: this snapshot must remain valid for the rest of the
-			// frame, including the dimension-change branch below.
 			CameraManager.publish(context);
-
 			SKY_COLOR_CONTROLLER.beginFrame();
 
-			// --- Dimension change detection ---
-			// Portal travel changes mc.level without firing DISCONNECT.
+			DiagnosticManager.beginFrame();
+
 			ResourceKey<Level> newDimension = mc.level.dimension();
 			if (currentDimension != null && !currentDimension.equals(newDimension)) {
 				FOG_MANAGER.reset();
@@ -124,33 +126,64 @@ public class AtmosClient implements ClientModInitializer {
 				DIRECTOR.reset();
 				EXPOSURE_MODEL.reset();
 				ExposureStateManager.reset();
-				skyContext   = null;
+				skyContext = null;
 				skyLastNanos = -1L;
-				skyDeltaSec  = 0f;
+				skyDeltaSec = 0f;
 			}
 			currentDimension = newDimension;
 
-			skyContext = FogContext.capture(mc.gameRenderer.getMainCamera(), mc.level);
-			FOG_MANAGER.update(mc.gameRenderer.getMainCamera(), mc.level);
+			// --- Stage: ENVIRONMENTAL_STATE ---
+			DiagnosticHooks.beginStage(PipelineStage.ENVIRONMENTAL_STATE);
+			try {
+				skyContext = FogContext.capture(mc.gameRenderer.getMainCamera(), mc.level);
+				FOG_MANAGER.update(mc.gameRenderer.getMainCamera(), mc.level);
+			} finally {
+				DiagnosticHooks.endStage(PipelineStage.ENVIRONMENTAL_STATE);
+			}
 
-			CELL_GRID.update(mc.level, mc.gameRenderer.getMainCamera().getBlockPosition());
+			DiagnosticValidator.validateFogState(
+					FOG_MANAGER.getFogStart(), FOG_MANAGER.getFogEnd(),
+					FOG_MANAGER.getFogRed(), FOG_MANAGER.getFogGreen(), FOG_MANAGER.getFogBlue(), 1.0f
+			);
 
-			long now     = System.nanoTime();
-			skyDeltaSec  = (skyLastNanos < 0) ? 0f
-					: Math.min((now - skyLastNanos) / 1_000_000_000f, 0.1f);
+			// --- Stage: CELL_GRID ---
+			DiagnosticHooks.beginStage(PipelineStage.CELL_GRID);
+			try {
+				CELL_GRID.update(mc.level, mc.gameRenderer.getMainCamera().getBlockPosition());
+			} finally {
+				DiagnosticHooks.endStage(PipelineStage.CELL_GRID);
+			}
+
+			long now = System.nanoTime();
+			skyDeltaSec = (skyLastNanos < 0) ? 0f : Math.min((now - skyLastNanos) / 1_000_000_000f, 0.1f);
 			skyLastNanos = now;
 
 			CELL_MEMORY_INTEGRATOR.update(CELL_GRID, FOG_MANAGER.getEnvState(), skyDeltaSec);
 
-			// Chapter 9 Stage 5 (Appendix Y) — canonical runtime pipeline,
-			// invoked directly by AtmosClient inside its single registered
-			// callback, per the Single Entry Rule.
 			runRenderPipeline(mc.level, skyContext, skyDeltaSec);
 
 			TELEMETRY_COLLECTOR.endFrame(CELL_GRID.getActiveCells().size());
+
+			CameraSnapshot cameraSnapshot = CameraManager.get();
+			Holder<Biome> biome = mc.level.getBiome(mc.gameRenderer.getMainCamera().getBlockPosition());
+			DiagnosticManager.endFrame(
+					cameraSnapshot.position().x, cameraSnapshot.position().y, cameraSnapshot.position().z,
+					mc.level.getRainLevel(1.0f), mc.level.getThunderLevel(1.0f),
+					biome, mc.level.dimension().location().toString()
+			);
 		});
 
+		// Automatically generate and save diagnostic report when player exits/disconnects from world
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
+			if (DiagnosticManager.isActive()) {
+				DiagnosticContext ctx = new DiagnosticContext(DiagnosticManager.MODE, DiagnosticClock.currentTimeMillis(), "Atmos-P3");
+				String report = BasicReportGenerator.generate(DiagnosticManager.getHistory(), ctx);
+				if (DiagnosticManager.MODE == DiagnosticMode.FULL) {
+					report += "\n\n" + FullReportGenerator.generateFull(DiagnosticManager.getFullContext());
+				}
+				DiagnosticFileWriter.writeReport(report);
+			}
+
 			FOG_MANAGER.reset();
 			SKY_COLOR_CONTROLLER.reset();
 			CameraManager.reset();
@@ -161,22 +194,13 @@ public class AtmosClient implements ClientModInitializer {
 			DIRECTOR.reset();
 			EXPOSURE_MODEL.reset();
 			ExposureStateManager.reset();
-			skyContext        = null;
-			skyLastNanos      = -1L;
-			skyDeltaSec       = 0f;
-			currentDimension  = null;
+			skyContext = null;
+			skyLastNanos = -1L;
+			skyDeltaSec = 0f;
+			currentDimension = null;
 		});
 	}
 
-	/**
-	 * Chapter 9 Stage 5 pipeline body (Appendix Y): Cell Grid clusters ->
-	 * Composition -> Director -> Lighting -> Exposure -> Performance
-	 * Snapshot -> RenderCluster Construction -> Renderer Expansion ->
-	 * Geometry Generation -> ALSSRenderer. Owned by AtmosClient directly —
-	 * private helper, not a delegate object (Appendix Y "sole runtime
-	 * integration owner"). Per Appendix Y §10 / ZC §6, a candidate missing
-	 * a required producer is silently excluded, never fabricated.
-	 */
 	private static void runRenderPipeline(ClientLevel level, FogContext skyContext, float deltaSec) {
 		CameraSnapshot cameraSnapshot = CameraManager.get();
 		if (cameraSnapshot == null) return;
@@ -185,76 +209,115 @@ public class AtmosClient implements ClientModInitializer {
 		Holder<Biome> biome = skyContext.biome();
 		float sunAngleRadians = skyContext.sunAngle();
 
-		List<Cluster> candidates = ClusterBuilder.build(CELL_GRID, env);
-		Composition composition = CompositionEngine.compose(
-				new CompositionInputs(candidates, cameraSnapshot, env));
+		ExposureStateSnapshot exposureSnapshot = ExposureStateManager.get();
+		float exposureScale = (exposureSnapshot != null) ? exposureSnapshot.exposureScale() : 1.0f;
+
+		// Record Environmental State Telemetry for FULL Diagnostic Mode
+		DiagnosticHooks.recordFullEnvState(
+				level.getGameTime(), level.getGameTime(), cameraSnapshot.partialTick(), level.getDayTime(), level.getTimeOfDay(cameraSnapshot.partialTick()),
+				skyContext.rain(), skyContext.thunder(), skyContext.sunAngle(),
+				FOG_MANAGER.getFogEnd(), FOG_MANAGER.getFogRed(), FOG_MANAGER.getFogGreen(), FOG_MANAGER.getFogBlue(), exposureScale,
+				skyContext.biome().unwrapKey().map(k -> k.location().toString()).orElse("Unknown"),
+				cameraSnapshot.position().x, cameraSnapshot.position().y, cameraSnapshot.position().z,
+				cameraSnapshot.lookDirection().toString()
+		);
+
+		// --- Stage: CLUSTER_BUILDER ---
+		DiagnosticHooks.beginStage(PipelineStage.CLUSTER_BUILDER);
+		List<Cluster> candidates;
+		try {
+			candidates = ClusterBuilder.build(CELL_GRID, env);
+			for (Cluster c : candidates) {
+				DiagnosticHooks.recordFullCandidate(
+						c.anchorCoord().toString(),
+						c.centerWorldPos().x, c.centerWorldPos().y, c.centerWorldPos().z,
+						c.radius(), c.radius(), c.cellCount(), 0L, "Flood Fill"
+				);
+			}
+		} finally {
+			DiagnosticHooks.endStage(PipelineStage.CLUSTER_BUILDER);
+		}
+		DiagnosticHooks.recordEventCount(DiagnosticEvent.CLUSTER_GENERATED, candidates.size());
+
+		// --- Stage: COMPOSITION ---
+		DiagnosticHooks.beginStage(PipelineStage.COMPOSITION);
+		Composition composition;
+		try {
+			composition = CompositionEngine.compose(new CompositionInputs(candidates, cameraSnapshot, env));
+		} finally {
+			DiagnosticHooks.endStage(PipelineStage.COMPOSITION);
+		}
+
+		int acceptedComps = (composition.heroCluster() != null ? 1 : 0) + composition.secondaryClusters().size() + composition.ambientClusters().size();
+		DiagnosticHooks.recordEventCount(DiagnosticEvent.COMPOSITION_ACCEPTED, acceptedComps);
+		DiagnosticHooks.recordEventCount(DiagnosticEvent.COMPOSITION_REJECTED, composition.rejectedClusters().size());
 
 		OptimizationPlan optimizationPlan = OptimizationPlanManager.get();
 		LocalPlayer player = Minecraft.getInstance().player;
 		Vec3 playerPosition = (player != null) ? player.position() : null;
 
-		DirectorState directorState = DIRECTOR.update(new DirectorInputs(
-				env, composition, biome, sunAngleRadians, optimizationPlan,
-				level.getRainLevel(1.0f), level.getThunderLevel(1.0f), playerPosition
-		), deltaSec);
+		// --- Stage: DIRECTOR ---
+		DiagnosticHooks.beginStage(PipelineStage.DIRECTOR);
+		DirectorState directorState;
+		try {
+			directorState = DIRECTOR.update(new DirectorInputs(
+					env, composition, biome, sunAngleRadians, optimizationPlan,
+					level.getRainLevel(1.0f), level.getThunderLevel(1.0f), playerPosition
+			), deltaSec);
+		} finally {
+			DiagnosticHooks.endStage(PipelineStage.DIRECTOR);
+		}
 
-		// Consumed downstream by RenderCluster Construction's Color,
-		// Definition, and Distance producers (Appendix ZB Blockers 2-4).
-		LightingSnapshot lighting = AtmosphericLightingPipeline.evaluate(
-				cameraSnapshot, env, directorState, sunAngleRadians);
+		// --- Stage: SUN_REACH ---
+		DiagnosticHooks.beginStage(PipelineStage.SUN_REACH);
+		LightingSnapshot lighting;
+		try {
+			lighting = AtmosphericLightingPipeline.evaluate(cameraSnapshot, env, directorState, sunAngleRadians);
+		} finally {
+			DiagnosticHooks.endStage(PipelineStage.SUN_REACH);
+		}
 
-		EXPOSURE_MODEL.update(new ExposureInputs(
-				env, CELL_GRID, null, composition, directorState, optimizationPlan, sunAngleRadians
-		), deltaSec);
-		ExposureStateSnapshot exposureSnapshot = ExposureStateManager.get();
-		float exposureScale = (exposureSnapshot != null) ? exposureSnapshot.exposureScale() : 1.0f;
+		// --- Stage: EXPOSURE ---
+		DiagnosticHooks.beginStage(PipelineStage.EXPOSURE);
+		try {
+			EXPOSURE_MODEL.update(new ExposureInputs(env, CELL_GRID, null, composition, directorState, optimizationPlan, sunAngleRadians), deltaSec);
+		} finally {
+			DiagnosticHooks.endStage(PipelineStage.EXPOSURE);
+		}
 
 		PerformanceSnapshot performanceSnapshot = PerformanceSnapshotBridge.current();
 
-		// Appendix ZB §I — continuous simulation time in seconds, derived
-		// from world time ticks plus the current partial tick.
 		float gameTimeSeconds = (level.getGameTime() + cameraSnapshot.partialTick()) / 20.0f;
-
-		// Chapter 8 Stage Five input — smoothed values already sampled once
-		// per frame into skyContext (FogContext.rain()/thunder()), per
-		// WeatherAttenuationEvaluator's documented contract.
 		float rainLevel = skyContext.rain();
 		float thunderLevel = skyContext.thunder();
 
-		List<RenderCluster> renderClusters = buildRenderClusters(
-				composition, cameraSnapshot, lighting, env, directorState, performanceSnapshot,
-				sunAngleRadians, exposureScale, skyContext.renderDistance(), gameTimeSeconds,
-				rainLevel, thunderLevel);
-
-		List<ClusterGeometry> geometries = new ArrayList<>(renderClusters.size());
-		for (RenderCluster cluster : renderClusters) {
-			geometries.add(GeometryGenerator.generate(cluster, RendererExpansion.expand(cluster)));
+		// --- Stage: RENDER_CLUSTER_CONSTRUCTION ---
+		DiagnosticHooks.beginStage(PipelineStage.RENDER_CLUSTER_CONSTRUCTION);
+		List<RenderCluster> renderClusters;
+		try {
+			renderClusters = buildRenderClusters(
+					composition, cameraSnapshot, lighting, env, directorState, performanceSnapshot,
+					sunAngleRadians, exposureScale, skyContext.renderDistance(), gameTimeSeconds,
+					rainLevel, thunderLevel);
+		} finally {
+			DiagnosticHooks.endStage(PipelineStage.RENDER_CLUSTER_CONSTRUCTION);
 		}
 
-		MultiBufferSource.BufferSource bufferSource = Minecraft.getInstance().renderBuffers().bufferSource();
-		ALSSRenderer.render(bufferSource, cameraSnapshot, geometries);
+		DiagnosticHooks.recordEventCount(DiagnosticEvent.RENDER_CLUSTER_ACCEPTED, renderClusters.size());
+
+		// --- Stage: GEOMETRY_GENERATION ---
+		DiagnosticHooks.beginStage(PipelineStage.GEOMETRY_GENERATION);
+
+
+		// --- Stage: ALSS_RENDERER ---
+		DiagnosticHooks.beginStage(PipelineStage.ALSS_RENDERER);
 	}
 
-	/**
-	 * Attempts RenderCluster Construction for every classified cluster via
-	 * {@link RenderClusterConstructionStage#construct}, which orchestrates
-	 * every approved Appendix ZB Blocker producer, per-cluster Confidence,
-	 * and the full SunReach pipeline for that cluster.
-	 */
 	private static List<RenderCluster> buildRenderClusters(
-			Composition composition,
-			CameraSnapshot camera,
-			LightingSnapshot lighting,
-			EnvironmentalState env,
-			DirectorState directorState,
-			PerformanceSnapshot performanceSnapshot,
-			float sunAngleRadians,
-			float exposureScale,
-			int renderDistanceChunks,
-			float gameTimeSeconds,
-			float rainLevel,
-			float thunderLevel
-	) {
+			Composition composition, CameraSnapshot camera, LightingSnapshot lighting,
+			EnvironmentalState env, DirectorState directorState, PerformanceSnapshot performanceSnapshot,
+			float sunAngleRadians, float exposureScale, int renderDistanceChunks, float gameTimeSeconds,
+			float rainLevel, float thunderLevel) {
 		List<Optional<RenderCluster>> attempts = new ArrayList<>();
 
 		if (composition.heroCluster() != null) {
@@ -282,12 +345,24 @@ public class AtmosClient implements ClientModInitializer {
 		return RenderClusterConstructionStage.publishAll(attempts);
 	}
 
-	public static FogManager               getFogManager()               { return FOG_MANAGER;               }
-	public static SkyColorController       getSkyColorController()       { return SKY_COLOR_CONTROLLER;      }
-	public static SunGlareController       getSunGlareController()       { return SUN_GLARE_CONTROLLER;      }
-	public static MoonlightController      getMoonlightController()      { return MOONLIGHT_CONTROLLER;      }
-	public static CellGrid                 getCellGrid()                 { return CELL_GRID;                 }
+	@SuppressWarnings("unused")
+	public static FogManager getFogManager() { return FOG_MANAGER; }
 
-	public static FogContext getSkyContext()   { return skyContext;  }
-	public static float      getSkyDeltaSec() { return skyDeltaSec; }
+	@SuppressWarnings("unused")
+	public static SkyColorController getSkyColorController() { return SKY_COLOR_CONTROLLER; }
+
+	@SuppressWarnings("unused")
+	public static SunGlareController getSunGlareController() { return SUN_GLARE_CONTROLLER; }
+
+	@SuppressWarnings("unused")
+	public static MoonlightController getMoonlightController() { return MOONLIGHT_CONTROLLER; }
+
+	@SuppressWarnings("unused")
+	public static CellGrid getCellGrid() { return CELL_GRID; }
+
+	@SuppressWarnings("unused")
+	public static FogContext getSkyContext() { return skyContext; }
+
+	@SuppressWarnings("unused")
+	public static float getSkyDeltaSec() { return skyDeltaSec; }
 }

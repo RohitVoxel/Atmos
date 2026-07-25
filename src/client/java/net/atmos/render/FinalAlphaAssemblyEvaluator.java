@@ -45,7 +45,6 @@ package net.atmos.render;
  * compositionWeight is accepted as a pre-computed scalar rather than
  * re-derived from a {@link RenderCluster.Role}. Chapter 10 Part 2's
  * Hero=1.00/Secondary=0.70/Ambient=0.40 hierarchy is already read
- * independently by {@link DensityProbabilityMap} (Chapter 9 Stage 2,
  * frozen) for an unrelated purpose. Re-deriving that mapping here would
  * duplicate an existing calculation and touch frozen code; accepting it
  * as an input avoids both.

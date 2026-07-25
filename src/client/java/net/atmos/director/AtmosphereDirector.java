@@ -3,6 +3,7 @@ package net.atmos.director;
 import net.atmos.atmosphere.fog.FogMath;
 import net.atmos.confidence.TierAEvaluator;
 import net.atmos.confidence.TierAResult;
+import net.atmos.diagnostics.DiagnosticHooks;
 import net.minecraft.core.Holder;
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.phys.Vec3;
@@ -237,6 +238,13 @@ public final class AtmosphereDirector {
         // class doc for why this is not phase-lock gated.
         float fogDensity = FogDensityEvaluator.evaluate(inputs.env());
 
+        // FULL DIAGNOSTICS: Complete director decision logging per frame
+        DiagnosticHooks.recordFullDirector(
+                previousPhase.name(), currentPhase.name(), newPhase.name(),
+                travelScale, timeInPhaseSeconds, transitionReason.name(),
+                weatherStableTime, currentTierAValue, heroMemory
+        );
+
         return new DirectorState(
                 currentPhase, previousPhase, transitionReason, timeInPhaseSeconds,
                 heroMoment, visualFatigue, globalIntensity, emotionalRhythm, heroMemory,
@@ -274,11 +282,11 @@ public final class AtmosphereDirector {
         previousValidTierAValue      = 0f;
     }
 
-    public DirectorPhase currentPhase()   { return currentPhase;   }
-    public float visualFatigue()          { return visualFatigue;  }
-    public float emotionalRhythm()        { return emotionalRhythm; }
-    public float heroMemory()             { return heroMemory;    }
-    public float weatherStableTime()      { return weatherStableTime; }
-    public boolean weatherStable()        { return weatherStableTime >= DirectorWeights.WEATHER_STABILITY_TIME; }
-    public float travelScale()            { return travelScale; }
+    @SuppressWarnings("unused") public DirectorPhase currentPhase()   { return currentPhase;   }
+    @SuppressWarnings("unused") public float visualFatigue()          { return visualFatigue;  }
+    @SuppressWarnings("unused") public float emotionalRhythm()        { return emotionalRhythm; }
+    @SuppressWarnings("unused") public float heroMemory()             { return heroMemory;    }
+    @SuppressWarnings("unused") public float weatherStableTime()      { return weatherStableTime; }
+    @SuppressWarnings("unused") public boolean weatherStable()        { return weatherStableTime >= DirectorWeights.WEATHER_STABILITY_TIME; }
+    @SuppressWarnings("unused") public float travelScale()            { return travelScale; }
 }

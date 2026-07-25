@@ -3,6 +3,7 @@ package net.atmos.composition;
 import net.atmos.cellgrid.CellCoord;
 import net.atmos.cluster.Cluster;
 import net.atmos.core.CameraSnapshot;
+import net.atmos.diagnostics.DiagnosticHooks;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.ArrayList;
@@ -88,6 +89,12 @@ public final class CompositionEngine {
         for (Cluster cluster : ordered) {
             ClusterConfidenceResult result = ClusterConfidenceEvaluator.evaluate(cluster, camera);
             confidenceByAnchor.put(cluster.anchorCoord(), result.value());
+
+            // FULL DIAGNOSTICS: Accurate, honest confidence value only.
+            DiagnosticHooks.recordFullConfidence(
+                    cluster.anchorCoord().toString(),
+                    result.value()
+            );
         }
 
         List<Cluster> viable   = new ArrayList<>();
@@ -97,6 +104,11 @@ public final class CompositionEngine {
                 viable.add(cluster);
             } else {
                 rejected.add(cluster);
+                DiagnosticHooks.recordFullComposition(
+                        cluster.anchorCoord().toString(),
+                        "Rejected",
+                        "Confidence (" + String.format("%.2f", confidenceByAnchor.get(cluster.anchorCoord())) + ") below threshold"
+                );
             }
         }
 
@@ -118,9 +130,13 @@ public final class CompositionEngine {
             }
         }
 
+        if (hero != null) {
+            DiagnosticHooks.recordFullComposition(hero.anchorCoord().toString(), "Accepted", "Selected as Hero");
+        }
+
         List<Cluster> remaining = new ArrayList<>();
         for (Cluster candidate : viable) {
-            if (!candidate.anchorCoord().equals(hero.anchorCoord())) {
+            if (hero != null && !candidate.anchorCoord().equals(hero.anchorCoord())) {
                 remaining.add(candidate);
             }
         }
@@ -134,7 +150,7 @@ public final class CompositionEngine {
         List<Cluster> ambient   = new ArrayList<>();
 
         Vec3 cameraPos = camera.position();
-        Vec3 heroPos   = hero.centerWorldPos();
+        Vec3 heroPos   = hero != null ? hero.centerWorldPos() : cameraPos;
 
         for (Cluster candidate : remaining) {
             Vec3 candidatePos = candidate.centerWorldPos();
@@ -153,8 +169,14 @@ public final class CompositionEngine {
 
             if (separated && secondary.size() < CompositionWeights.MAX_SECONDARY_COUNT) {
                 secondary.add(candidate);
+                DiagnosticHooks.recordFullComposition(candidate.anchorCoord().toString(), "Accepted", "Selected as Secondary");
             } else {
                 ambient.add(candidate);
+                DiagnosticHooks.recordFullComposition(
+                        candidate.anchorCoord().toString(),
+                        "Accepted",
+                        separated ? "Selected as Ambient (Max Secondary Reached)" : "Selected as Ambient (Insufficient Angular Separation)"
+                );
             }
         }
 
