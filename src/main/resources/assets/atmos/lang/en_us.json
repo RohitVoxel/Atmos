@@ -1,0 +1,5 @@
+{
+  "key.atmos.toggle_diagnostics": "Toggle Atmos Diagnostics",
+  "key.atmos.reload_config": "Reload Atmos Config",
+  "category.atmos.keys": "Atmos"
+}

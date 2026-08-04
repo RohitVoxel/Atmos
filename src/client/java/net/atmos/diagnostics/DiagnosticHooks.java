@@ -11,6 +11,26 @@ public final class DiagnosticHooks {
         if (!DiagnosticManager.isActive()) return;
         DiagnosticManager.recordStageStart(stage);
     }
+    public static void recordFullAirState(boolean active, float pressure, float density,
+                                          float stability, float turbulence, float aerosolDensity) {
+        if (DiagnosticManager.MODE != DiagnosticMode.FULL) return;
+        DiagnosticManager.getFullContext().airLog =
+                new FullDiagnosticContext.AirLog(active, pressure, density, stability, turbulence, aerosolDensity);
+    }
+    public static void recordFullSeasonalState(net.atmos.seasonal.SeasonalFeelingSnapshot snapshot) {
+        if (DiagnosticManager.MODE != DiagnosticMode.FULL) return;
+        DiagnosticManager.getFullContext().seasonalLog = new FullDiagnosticContext.SeasonalLog(
+                snapshot.calendar().currentSeason().name(),
+                snapshot.calendar().nextSeason().name(),
+                snapshot.calendar().seasonProgress(),
+                snapshot.calendar().seasonStrength(),
+                snapshot.influence().temperatureInfluence(),
+                snapshot.influence().humidityInfluence(),
+                snapshot.influence().daylightInfluence(),
+                snapshot.influence().windTendency(),
+                snapshot.influence().weatherTendency()
+        );
+    }
 
     public static void endStage(PipelineStage stage) {
         if (!DiagnosticManager.isActive()) return;

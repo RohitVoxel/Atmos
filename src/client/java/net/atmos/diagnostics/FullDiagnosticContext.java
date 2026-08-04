@@ -44,4 +44,13 @@ public final class FullDiagnosticContext {
         public int submitted, rendered, skipped, culled, totalVertices, drawCalls;
         public final Map<String, String> cullReasons = new HashMap<>();
     }
+    public AirLog airLog;
+
+    public record AirLog(boolean active, float pressure, float density,
+                         float stability, float turbulence, float aerosolDensity) {}
+    public SeasonalLog seasonalLog;
+
+    public record SeasonalLog(String season, String nextSeason, float seasonProgress, float seasonStrength,
+                              float temperatureInfluence, float humidityInfluence, float daylightInfluence,
+                              float windTendency, float weatherTendency) {}
 }

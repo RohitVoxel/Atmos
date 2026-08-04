@@ -1,21 +1,14 @@
 package net.atmos.seasonal;
 
+import java.util.Objects;
+
 /**
  * Immutable published output of the Seasonal Feeling System — Chapter 15,
- * Appendix X Revision 2.4 §11.
+ * Appendix X Revision 2.4 §11, extended Phase 1 (365-day calendar, named
+ * seasons, season progress/strength, explicit influence channels).
  *
- * Exactly one snapshot exists per publication (§11 "Publication"). All
- * fields are strictly immutable; the snapshot remains valid until replaced
- * by the next snapshot published via {@link SeasonalFeelingStateManager}.
- *
- * seasonalProgress / macroMood / microMood are direct outputs of the frozen
- * Stage 2 pipeline (Seasonal Clock / Daily Rhythm -> Atmospheric Mood). The
- * five tendency/bias fields remain neutral placeholders (SFSConstants.NEUTRAL_*)
- * pending Continuous Bias Generation (Appendix X §7) — out of scope for Stage 2.
- *
- * Sign convention for thermalTendency, moistureTendency, densityBias,
- * clarityBias, and volatility is not yet Architect-confirmed (see
- * SFSConstants class doc) — only finiteness is validated here, not range.
+ * The original eight fields are unchanged in semantics and ownership.
+ * calendar/influence are additive Phase 1 fields.
  */
 public record SeasonalFeelingSnapshot(
         float seasonalProgress,
@@ -25,24 +18,24 @@ public record SeasonalFeelingSnapshot(
         float moistureTendency,
         float densityBias,
         float clarityBias,
-        float volatility
+        float volatility,
+        SeasonalCalendarResult calendar,
+        SeasonalInfluenceResult influence
 ) {
     public SeasonalFeelingSnapshot {
         if (!Float.isFinite(seasonalProgress) || seasonalProgress < 0f || seasonalProgress > 1f) {
             throw new IllegalArgumentException(
                     "seasonalProgress must be within [0,1], got " + seasonalProgress);
         }
-        if (macroMood == null) {
-            throw new IllegalArgumentException("macroMood must not be null");
-        }
-        if (microMood == null) {
-            throw new IllegalArgumentException("microMood must not be null");
-        }
+        if (macroMood == null) throw new IllegalArgumentException("macroMood must not be null");
+        if (microMood == null) throw new IllegalArgumentException("microMood must not be null");
         requireFinite("thermalTendency", thermalTendency);
         requireFinite("moistureTendency", moistureTendency);
         requireFinite("densityBias", densityBias);
         requireFinite("clarityBias", clarityBias);
         requireFinite("volatility", volatility);
+        calendar  = Objects.requireNonNullElseGet(calendar, SeasonalCalendarResult::neutral);
+        influence = Objects.requireNonNullElseGet(influence, SeasonalInfluenceResult::neutral);
     }
 
     private static void requireFinite(String name, float value) {
@@ -61,7 +54,9 @@ public record SeasonalFeelingSnapshot(
                 SFSConstants.NEUTRAL_MOISTURE_TENDENCY,
                 SFSConstants.NEUTRAL_DENSITY_BIAS,
                 SFSConstants.NEUTRAL_CLARITY_BIAS,
-                SFSConstants.NEUTRAL_VOLATILITY
+                SFSConstants.NEUTRAL_VOLATILITY,
+                SeasonalCalendarResult.neutral(),
+                SeasonalInfluenceResult.neutral()
         );
     }
 }

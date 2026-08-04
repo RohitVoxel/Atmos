@@ -6,12 +6,13 @@ import net.atmos.atmosphere.fog.biome.BiomeTraits;
 import net.atmos.atmosphere.fog.modifiers.*;
 import net.atmos.atmosphere.AtmosphereDrifter;
 import net.atmos.config.AtmosConfig;
+import net.atmos.config.AtmosReloadable;
 import net.atmos.config.FogConfig;
 import net.minecraft.client.Camera;
 import net.minecraft.client.multiplayer.ClientLevel;
 import java.util.List;
 
-public final class FogManager {
+public final class FogManager implements AtmosReloadable {
 
     private final FogInterpolator    interpolator   = new FogInterpolator();
     private final EnvironmentalState envState       = new EnvironmentalState();
@@ -25,10 +26,6 @@ public final class FogManager {
     private final AtmosphereDrifter driftEnd   = new AtmosphereDrifter( 96f, 0.9f, 2.2f);
     private final AtmosphereDrifter driftStart = new AtmosphereDrifter(  8f, 1.1f, 2.5f);
 
-    // Color drifters matched closer to sky drifter speed (2.5/6.0) to eliminate
-    // the ~70% lag that causes visible sky/fog color divergence at the horizon
-    // during dawn and dusk transitions. Fog color still runs slightly behind sky
-    // (ground-level air lags upper atmosphere) but no longer diverges visibly.
     private final AtmosphereDrifter driftRed   = new AtmosphereDrifter(0.72f, 2.0f, 5.0f);
     private final AtmosphereDrifter driftGreen = new AtmosphereDrifter(0.78f, 2.0f, 5.0f);
     private final AtmosphereDrifter driftBlue  = new AtmosphereDrifter(0.84f, 2.0f, 5.0f);
@@ -181,6 +178,11 @@ public final class FogManager {
         FogContext.clearBiomeCache();
     }
 
+    /** AtmosReloadable — Fog reads AtmosConfig live every frame; nothing cached to invalidate. */
+    @Override
+    public void onConfigReload() {
+    }
+
     public EnvironmentalState getEnvState() { return envState; }
 
     public float getFogStart() { return renderState.start(); }
@@ -189,16 +191,6 @@ public final class FogManager {
     public float getFogGreen() { return renderState.green(); }
     public float getFogBlue()  { return renderState.blue();  }
 
-    // Added for Forest Spec Task 1 (Crepuscular Rays), Fix 2.
-    // renderState.openness() is already the correct value to consume: it's
-    // copied straight from targetState.openness(), which itself comes from
-    // interpolator.resolve()'s currentOpenness — the same hold-time +
-    // hysteresis-gated blend FogInterpolator already uses for fog
-    // start/end/color at biome borders. No FogModifier in the pipeline
-    // changes the openness field (every FogState.with*() variant carries it
-    // through unmodified), so this is exactly the value the rest of the fog
-    // system already treats as authoritative — just not previously exposed
-    // outside FogManager.
     public float getFogOpenness() { return renderState.openness(); }
 
     private void snapDrifters() {

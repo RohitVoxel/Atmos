@@ -148,6 +148,8 @@ public final class CellGrid {
 
     private long tickCounter = 0L;
 
+    private long structuralVersion = 0L;
+
     /**
      * Advances the Cell Grid for the current frame/tick. Cheap no-op unless
      * the camera has moved into a different center cell since the last call,
@@ -173,7 +175,6 @@ public final class CellGrid {
 
         Set<CellCoord> desired = computeDesiredCoords(center);
 
-        // Promote cells into the active set: reuse from cache, or create new.
         for (CellCoord coord : desired) {
             AtmosCell cell = active.get(coord);
             if (cell == null) {
@@ -186,26 +187,12 @@ public final class CellGrid {
             cell.touch(tickCounter);
         }
 
-        // Demote cells that fell outside the radius into the cache tier.
         var it = active.entrySet().iterator();
         while (it.hasNext()) {
             var entry = it.next();
             if (!desired.contains(entry.getKey())) {
                 AtmosCell demoted = entry.getValue();
 
-                // AUTOPSY Chapter 7 cleanup: if this cell was marked dirty
-                // while active but is demoted before
-                // regenerateDirtyActiveCells() below has a chance to process
-                // it, its dirty state must not be lost. hasDirtyActiveCell
-                // is a grid-level aggregate flag — it cannot represent
-                // "this specific demoted cell is still dirty," and once
-                // regenerateDirtyActiveCells() finishes its next scan (which
-                // will no longer see this cell in active.values()), it
-                // unconditionally clears that flag. Recording the coordinate
-                // in dirtyCoords — the same mechanism already used for cells
-                // dirtied while not currently active — guarantees the dirty
-                // state survives the cache round-trip and is honored the
-                // moment this coordinate becomes active again.
                 if (demoted.isDirty()) {
                     dirtyCoords.add(entry.getKey());
                 }
@@ -215,8 +202,13 @@ public final class CellGrid {
             }
         }
 
+        structuralVersion++;
+
         regenerateDirtyActiveCells(level);
     }
+
+    /** Batch 1 Phase 3 — cheap version counter for downstream needsUpdate() gates. */
+    public long structuralVersion() { return structuralVersion; }
 
     /** Returns the loaded cell at the given coordinate, or null if not active. */
     public AtmosCell getCell(CellCoord coord) {
@@ -319,6 +311,7 @@ public final class CellGrid {
         hasDirtyActiveCell = false;
         lastCenterCoord = null;
         tickCounter = 0L;
+        structuralVersion = 0L;
         currentDimensionKey = null;
     }
 

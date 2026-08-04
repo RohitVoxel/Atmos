@@ -3,41 +3,13 @@ package net.atmos.atmosphere;
 import net.atmos.atmosphere.fog.FogContext;
 import net.atmos.atmosphere.fog.FogMath;
 import net.atmos.atmosphere.fog.biome.BiomeTraits;
+import net.atmos.config.AirConfig;
+import net.atmos.config.AtmosConfig;
+import net.atmos.config.SeasonalConfig;
+import net.atmos.seasonal.SeasonalFeelingSnapshot;
+import net.atmos.seasonal.SeasonalFeelingStateManager;
 
-/**
- * Persistent simulation of the world's atmospheric condition.
- *
- * NOT a fog state. The environmental pressure that fog, sky, and color
- * systems all read from. Because every system reads the same drifting values,
- * storms, nights, and biome crossings feel like unified world events.
- *
- * humidityMass      — accumulated air moisture. Builds slowly in humid biomes.
- * stormEnergy       — emotional storm intensity. Rises slower than rain level.
- * stormApproach     — positive drifter velocity: storm is building.
- * stormClearing     — negative drifter velocity: storm is actively dissipating.
- * thunderFlash      — per-strike flash signal. Instant onset, fast decay (~0.3s).
- * thermalEnergy     — daytime heat. Counteracts humidity.
- * nightDepth        — smooth 0→1 as night deepens.
- * valleyCompression — terrain enclosure. Written by ValleyFogModifier.
- * skyMoisture       — upper sky haze. Lags behind humidityMass.
- *
- * All drifter-backed fields clamped to [0,1] after advance.
- *
- * thunderFlash is not drifter-backed — lightning requires instant onset.
- * A drifter would introduce a build delay before the flash peaks.
- * Instead: snap to 1.0 on trigger, decay via exponential with FLASH_DECAY_RATE.
- * At FLASH_DECAY_RATE=4.5, half-life ≈ 0.15s, fully decayed in ~0.5s.
- *
- * Flash probability is frame-rate independent: chance = thunder * stormEnergy
- * * FLASH_RATE * deltaSec. At full storm ~0.10 flashes/second on average.
- *
- * Access pattern note: public fields remain the primary access path for
- * existing consumers (documented precedent in TierAEvaluator's class doc).
- * getHumidityMass() is an additive accessor for consumers outside this
- * chapter's original call-site set (e.g. net.atmos.director) that prefer
- * accessor-based reads per Chapter 17's "hide internal implementation"
- * guidance — it does not replace or deprecate the public field.
- */
+
 public final class EnvironmentalState {
 
     private final AtmosphereDrifter humidityMassDrifter      = new AtmosphereDrifter(0.35f, 0.6f,  3.5f);
@@ -46,6 +18,18 @@ public final class EnvironmentalState {
     private final AtmosphereDrifter thermalEnergyDrifter     = new AtmosphereDrifter(0.4f,  0.7f,  1.2f);
     private final AtmosphereDrifter nightDepthDrifter        = new AtmosphereDrifter(0.0f,  1.1f,  2.5f);
     private final AtmosphereDrifter skyMoistureDrifter       = new AtmosphereDrifter(0.35f, 0.35f, 2.0f);
+
+    // --- Air Foundation (Stage 1) drifters ---
+    private final AtmosphereDrifter airPressureDrifter           = new AtmosphereDrifter(0.75f, 0.12f, 1.0f);
+    private final AtmosphereDrifter airDensityDrifter             = new AtmosphereDrifter(0.75f, 0.5f,  2.0f);
+    private final AtmosphereDrifter atmosphericStabilityDrifter   = new AtmosphereDrifter(0.70f, 0.4f,  1.8f);
+    private final AtmosphereDrifter turbulenceDrifter             = new AtmosphereDrifter(0.05f, 0.5f,  2.0f);
+    private final AtmosphereDrifter aerosolDensityDrifter         = new AtmosphereDrifter(0.30f, 0.3f,  1.5f);
+
+    // Sea-level reference and altitude range used for Air Foundation
+    // altitude normalization. Mirrors HeightFogModifier's altitude bands.
+    private static final float AIR_SEA_LEVEL_Y    = 64f;
+    private static final float AIR_ALTITUDE_RANGE = 220f;
 
     // Thunder flash: not drifter-backed. Instant onset, exponential decay.
     // Half-life = ln(2) / FLASH_DECAY_RATE ≈ 0.154 seconds.
@@ -58,6 +42,9 @@ public final class EnvironmentalState {
     // Minimum thunder level to allow flashes.
     private static final float FLASH_THUNDER_MIN = 0.35f;
 
+    private static final float SEASONAL_HUMIDITY_SHIFT_MAX = 0.12f;
+    private static final float SEASONAL_THERMAL_SHIFT_MAX   = 0.12f;
+
     public float humidityMass      = 0.35f;
     public float stormEnergy       = 0.0f;
     public float stormApproach     = 0.0f;
@@ -68,10 +55,20 @@ public final class EnvironmentalState {
     public float nightDepth        = 0.0f;
     public float skyMoisture       = 0.35f;
 
+    // --- Air Foundation (Stage 1) published state ---
+    public float airPressure          = 0.75f;
+    public float airDensity           = 0.75f;
+    public float atmosphericStability = 0.70f;
+    public float turbulence           = 0.05f;
+    public float aerosolDensity       = 0.30f;
+
     public void advance(FogContext ctx, BiomeTraits traits, float deltaSec) {
         float rainSaturation = ctx.rain() * traits.humidity() * 0.6f;
         float humidityTarget = Math.min(1.0f, traits.humidity() + rainSaturation);
         humidityMass = FogMath.clamp(humidityMassDrifter.advance(humidityTarget, deltaSec), 0f, 1f);
+
+        humidityTarget = applySeasonalHumidityBias(humidityTarget);
+
 
         float rainCurved  = rainIntensityCurve(ctx.rain());
         float rawStorm    = rainCurved * 0.7f + ctx.thunder() * 0.5f;
@@ -104,12 +101,67 @@ public final class EnvironmentalState {
         float thermalTarget = rawThermal * (0.5f + traits.openness() * 0.5f);
         thermalEnergy = FogMath.clamp(thermalEnergyDrifter.advance(thermalTarget, deltaSec), 0f, 1f);
 
+        thermalTarget = applySeasonalThermalBias(thermalTarget);
+
         float nightTarget = Math.max(0f, -sunHeight);
         nightDepth = FogMath.clamp(nightDepthDrifter.advance(nightTarget, deltaSec), 0f, 1f);
 
         valleyCompression = valleyCompressionDrifter.get();
 
         skyMoisture = FogMath.clamp(skyMoistureDrifter.advance(humidityMass * 0.85f, deltaSec), 0f, 1f);
+
+        advanceAir(ctx, deltaSec);
+    }
+
+    /**
+     * Air Foundation (Stage 1). Publishes pressure, density, atmospheric
+     * stability, and two forward-looking foundation signals (turbulence,
+     * aerosol density) that future Wind and Haze systems will consume.
+     *
+     * Never renders. Never modifies fog, clouds, lighting, visibility, or
+     * weather directly — only publishes atmospheric state, per Air Density
+     * & Pressure Architecture.md's design rules.
+     *
+     * Reads stormEnergy/stormApproach/stormClearing/thermalEnergy/humidityMass
+     * computed earlier in this same advance() call — no duplicate humidity
+     * or thermal calculation is introduced here.
+     */
+    private void advanceAir(FogContext ctx, float deltaSec) {
+        AirConfig airCfg = AtmosConfig.get().air;
+        if (!airCfg.airSimulationEnabled) return;
+
+        float airDeltaSec = deltaSec * airCfg.safeSimulationSpeed();
+
+        float altitudeNorm = FogMath.clamp(
+                (ctx.cameraY() - AIR_SEA_LEVEL_Y) / AIR_ALTITUDE_RANGE, 0f, 1f);
+
+        float densityTarget = FogMath.clamp(
+                1f - altitudeNorm * 0.55f - (thermalEnergy - 0.5f) * 0.15f - humidityMass * 0.05f,
+                0.05f, 1f);
+        airDensity = FogMath.clamp(airDensityDrifter.advance(densityTarget, airDeltaSec), 0f, 1f);
+
+        float pressureTarget = FogMath.clamp(
+                1f - altitudeNorm * 0.65f - stormEnergy * 0.35f - stormApproach * 0.10f,
+                0.05f, 1f);
+        airPressure = FogMath.clamp(airPressureDrifter.advance(pressureTarget, airDeltaSec), 0f, 1f);
+
+        float stabilityTarget = FogMath.clamp(
+                1f - stormEnergy * 0.60f - stormApproach * 0.25f - stormClearing * 0.15f,
+                0f, 1f);
+        atmosphericStability = FogMath.clamp(
+                atmosphericStabilityDrifter.advance(stabilityTarget, airDeltaSec), 0f, 1f);
+
+        float turbulenceTarget = FogMath.clamp(
+                stormEnergy * 0.70f + stormApproach * 0.20f + stormClearing * 0.15f,
+                0f, 1f);
+        turbulence = FogMath.clamp(turbulenceDrifter.advance(turbulenceTarget, airDeltaSec), 0f, 1f);
+
+        float aerosolTarget = FogMath.clamp(
+                (1f - humidityMass) * 0.55f + thermalEnergy * 0.25f
+                        - ctx.rain() * 0.50f - stormEnergy * 0.20f,
+                0f, 1f);
+        aerosolDensity = FogMath.clamp(
+                aerosolDensityDrifter.advance(aerosolTarget, airDeltaSec), 0f, 1f);
     }
 
     public void snapToTargets(FogContext ctx, BiomeTraits traits) {
@@ -140,6 +192,35 @@ public final class EnvironmentalState {
         thermalEnergy = thermalTarget;
         nightDepth    = nightTarget;
         skyMoisture   = skyMoistTarget;
+
+        if (AtmosConfig.get().air.airSimulationEnabled) {
+            float altitudeNorm = FogMath.clamp(
+                    (ctx.cameraY() - AIR_SEA_LEVEL_Y) / AIR_ALTITUDE_RANGE, 0f, 1f);
+
+            float densityTarget = FogMath.clamp(
+                    1f - altitudeNorm * 0.55f - (thermalTarget - 0.5f) * 0.15f - humidityTarget * 0.05f,
+                    0.05f, 1f);
+            float pressureTarget = FogMath.clamp(
+                    1f - altitudeNorm * 0.65f - stormTarget * 0.35f, 0.05f, 1f);
+            float stabilityTarget = FogMath.clamp(1f - stormTarget * 0.60f, 0f, 1f);
+            float turbulenceTarget = FogMath.clamp(stormTarget * 0.70f, 0f, 1f);
+            float aerosolTarget = FogMath.clamp(
+                    (1f - humidityTarget) * 0.55f + thermalTarget * 0.25f
+                            - ctx.rain() * 0.50f - stormTarget * 0.20f,
+                    0f, 1f);
+
+            airDensityDrifter          .snap(densityTarget);
+            airPressureDrifter         .snap(pressureTarget);
+            atmosphericStabilityDrifter.snap(stabilityTarget);
+            turbulenceDrifter          .snap(turbulenceTarget);
+            aerosolDensityDrifter      .snap(aerosolTarget);
+
+            airDensity            = densityTarget;
+            airPressure           = pressureTarget;
+            atmosphericStability  = stabilityTarget;
+            turbulence            = turbulenceTarget;
+            aerosolDensity        = aerosolTarget;
+        }
     }
 
     public void pushValleyCompression(float rawValleyFactor, float deltaSec) {
@@ -154,6 +235,12 @@ public final class EnvironmentalState {
         nightDepthDrifter       .snap(0.0f);
         skyMoistureDrifter      .snap(0.35f);
 
+        airPressureDrifter          .snap(0.75f);
+        airDensityDrifter           .snap(0.75f);
+        atmosphericStabilityDrifter .snap(0.70f);
+        turbulenceDrifter           .snap(0.05f);
+        aerosolDensityDrifter       .snap(0.30f);
+
         humidityMass      = 0.35f;
         stormEnergy       = 0.0f;
         stormApproach     = 0.0f;
@@ -163,10 +250,35 @@ public final class EnvironmentalState {
         thermalEnergy     = 0.4f;
         nightDepth        = 0.0f;
         skyMoisture       = 0.35f;
+
+        airPressure           = 0.75f;
+        airDensity            = 0.75f;
+        atmosphericStability  = 0.70f;
+        turbulence            = 0.05f;
+        aerosolDensity        = 0.30f;
     }
 
     private static float rainIntensityCurve(float rain) {
         return (float) Math.pow(FogMath.clamp(rain, 0f, 1f), 1.8f);
+    }
+    private float applySeasonalHumidityBias(float target) {
+        SeasonalConfig cfg = AtmosConfig.get().seasonal;
+        if (!cfg.seasonalCycleEnabled || !cfg.environmentalStateInfluenceEnabled) return target;
+
+        SeasonalFeelingSnapshot season = SeasonalFeelingStateManager.get();
+        float scale = season.calendar().seasonStrength() * cfg.safeInfluenceStrength();
+        float shift = season.influence().humidityInfluence() * SEASONAL_HUMIDITY_SHIFT_MAX * scale;
+        return FogMath.clamp(target + shift, 0f, 1f);
+    }
+
+    private float applySeasonalThermalBias(float target) {
+        SeasonalConfig cfg = AtmosConfig.get().seasonal;
+        if (!cfg.seasonalCycleEnabled || !cfg.environmentalStateInfluenceEnabled) return target;
+
+        SeasonalFeelingSnapshot season = SeasonalFeelingStateManager.get();
+        float scale = season.calendar().seasonStrength() * cfg.safeInfluenceStrength();
+        float shift = season.influence().temperatureInfluence() * SEASONAL_THERMAL_SHIFT_MAX * scale;
+        return FogMath.clamp(target + shift, 0f, 1f);
     }
 
     public float getHumidityMass()  { return humidityMass;  }
@@ -177,4 +289,10 @@ public final class EnvironmentalState {
     public float getStormApproach() { return stormApproach; }
     public float getStormClearing() { return stormClearing; }
     public float getThunderFlash()  { return thunderFlash;  }
+
+    public float getAirPressure()          { return airPressure;          }
+    public float getAirDensity()           { return airDensity;           }
+    public float getAtmosphericStability() { return atmosphericStability; }
+    public float getTurbulence()           { return turbulence;           }
+    public float getAerosolDensity()       { return aerosolDensity;       }
 }

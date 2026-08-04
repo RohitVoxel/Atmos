@@ -19,6 +19,22 @@ public final class FullReportGenerator {
         sb.append(String.format("Weather: Rain=%.2f, Thunder=%.2f\n", ctx.rainIntensity, ctx.thunderIntensity));
         sb.append(String.format("Camera: Pos=[%.1f, %.1f, %.1f] Dir=%s\n\n", ctx.camX, ctx.camY, ctx.camZ, ctx.cameraDir));
 
+        if (ctx.airLog != null) {
+            sb.append(String.format(
+                    "Air Foundation: Active=%b Pressure=%.2f Density=%.2f Stability=%.2f Turbulence=%.2f Aerosol=%.2f\n\n",
+                    ctx.airLog.active(), ctx.airLog.pressure(), ctx.airLog.density(),
+                    ctx.airLog.stability(), ctx.airLog.turbulence(), ctx.airLog.aerosolDensity()));
+        }
+
+        if (ctx.seasonalLog != null) {
+            sb.append(String.format(
+                    "Season: %s -> %s (progress=%.2f strength=%.2f) Temp=%.2f Humid=%.2f Daylight=%.2f Wind=%.2f Weather=%.2f\n\n",
+                    ctx.seasonalLog.season(), ctx.seasonalLog.nextSeason(),
+                    ctx.seasonalLog.seasonProgress(), ctx.seasonalLog.seasonStrength(),
+                    ctx.seasonalLog.temperatureInfluence(), ctx.seasonalLog.humidityInfluence(),
+                    ctx.seasonalLog.daylightInfluence(), ctx.seasonalLog.windTendency(), ctx.seasonalLog.weatherTendency()));
+        }
+
         sb.append("2. DIRECTOR STATE\n");
         if (ctx.directorLog != null) {
             sb.append(String.format("Phase: %s -> %s | Speed: %.2f | Reason: %s\n", ctx.directorLog.prevTarget(), ctx.directorLog.currTarget(), ctx.directorLog.transSpeed(), ctx.directorLog.changeReason()));

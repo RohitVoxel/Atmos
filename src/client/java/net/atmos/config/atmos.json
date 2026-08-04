@@ -22,6 +22,24 @@
   "debug": {
     "overlayEnabled": false,
     "logBiomeChanges": false,
-    "logModifierValues": false
+    "logModifierValues": false,
+    "configAutoReload": false
+  },
+  "air": {
+    "airSimulationEnabled": true,
+    "simulationSpeed": 1.0
+  },
+  "overlay": {
+    "overlaysEnabled": true,
+    "seasonalOverlaysEnabled": true,
+    "rainOverlaysEnabled": true,
+    "updateSpeed": 1.0,
+    "renderDistanceBlocks": 128,
+    "debugOverlays": false,
+    "surfaceRendererEnabled": true,
+    "surfaceDepthOffset": 0.02,
+    "simulationRadiusChunks": 12,
+    "qualityTier": "HIGH",
+    "dirtyUpdateBudget": 128
   }
 }

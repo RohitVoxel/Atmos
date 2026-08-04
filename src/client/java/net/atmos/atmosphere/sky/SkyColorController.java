@@ -4,6 +4,7 @@ import net.atmos.atmosphere.AtmosphereDrifter;
 import net.atmos.atmosphere.EnvironmentalState;
 import net.atmos.atmosphere.fog.FogContext;
 import net.atmos.atmosphere.fog.FogMath;
+import net.atmos.config.AtmosConfig;
 
 /**
  * Modifies the vanilla sky color to reflect atmospheric conditions.
@@ -130,7 +131,7 @@ public final class SkyColorController {
         // All channels dim; blue dims at half rate — deep navy emerges as a
         // consequence of darkening, not from an additive cobalt push.
         // Storm-gated: overcast twilight stays grey, not blue.
-        if (sunHeight < 0f) {
+        if (AtmosConfig.get().skyPhase.blueHourEnabled && sunHeight < 0f) {
             float distFromPeak = Math.abs(sunHeight - BLUE_HOUR_PEAK);
             float rawFactor    = FogMath.clamp(1f - distFromPeak / BLUE_HOUR_RANGE, 0f, 1f);
             float blueHour     = FogMath.smoothstep(rawFactor);
@@ -177,23 +178,7 @@ public final class SkyColorController {
             b = FogMath.lerp(b, gray * 0.88f, stormEnergy * 0.38f);
         }
 
-        // --- Post-storm clearing sky brightening ---
-        // When storm energy is actively dissipating (stormClearing > floor),
-        // the sky briefly brightens beyond its baseline — the warm-white quality
-        // of sunlight breaking through the last departing clouds.
-        //
-        // This completes the weather cycle for the sky: storm darkens (above),
-        // storm clears (here). WeatherFogModifier already implements the
-        // equivalent for fog (clearing expansion + cool-blue shift on the same
-        // stormClearing drifter signal). Sky and fog now clear together.
-        //
-        // Storm-gated at CLEARING_STORM_GATE: only fires once stormEnergy has
-        // dropped well below active-storm levels so it cannot combine with the
-        // storm darkening above.
-        //
-        // Day-gated: clearing at night simply reveals the dark sky that storm
-        // darkening was suppressing. No extra brightening needed — storm fading
-        // already handles the night case. The warm-white effect is sunlight only.
+
         float stormClearing = env.getStormClearing();
         if (stormClearing > CLEARING_SIGNAL_FLOOR
                 && stormEnergy < CLEARING_STORM_GATE

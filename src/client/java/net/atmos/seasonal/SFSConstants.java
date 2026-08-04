@@ -28,12 +28,8 @@ public final class SFSConstants {
     /** Full seasonal cycle expressed in radians — Appendix X §7 periodicity. */
     public static final float TWO_PI = (float) (2.0 * Math.PI);
 
-    /**
-     * Appendix X Revision 2.7 §2 — golden-ratio scalar used by
-     * {@link SeasonalClock#deriveMoistureCycleLength} to derive the
-     * moisture cycle length from the thermal cycle length:
-     * {@code Math.round(thermalCycleLengthTicks * MOISTURE_CYCLE_SCALAR)}.
-     * Fixed value per Rohit's explicit specification — not implementation-defined.
-     */
     public static final float MOISTURE_CYCLE_SCALAR = 1.6180339f;
+
+    /** Phase 1 — 365-day seasonal calendar, per explicit Architect specification. */
+    public static final long YEAR_LENGTH_TICKS = 24_000L * 365L;
 }
